@@ -1,0 +1,8 @@
+# Logs
+logs/
+
+# Not used directory
+not used/
+
+# Python cache
+__pycache__/ 
