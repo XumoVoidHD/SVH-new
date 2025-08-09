@@ -7,8 +7,10 @@ import random
 import threading
 import time
 from datetime import datetime, timedelta
+import pytz
 from helpers import vwap, ema, macd, adx, atr
 from log import setup_logger
+from db.trades_db import trades_db
 setup_logger()
 
 
@@ -45,6 +47,94 @@ class Strategy:
         self.pnl = 0
         self.entry_time = None
         self.close_time = None
+        self.trailing_exit_monitoring = False
+        
+        # Load existing data from database if available
+        self.load_from_database()
+    
+    def is_entry_time_window(self):
+        """Check if current time is within entry time windows"""
+        # Get current time in USA Eastern Time
+        eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+        current_time = datetime.now(eastern_tz)
+        current_time_str = current_time.strftime("%H:%M")
+        
+        # Get entry windows from configuration
+        morning_start = self.trading_hours['morning_entry_start']
+        morning_end = self.trading_hours['morning_entry_end']
+        afternoon_start = self.trading_hours['afternoon_entry_start']
+        afternoon_end = self.trading_hours['afternoon_entry_end']
+        
+        # Check if current time is in either window
+        in_morning_window = morning_start <= current_time_str <= morning_end
+        in_afternoon_window = afternoon_start <= current_time_str <= afternoon_end
+        
+        return in_morning_window or in_afternoon_window
+    
+    def get_next_entry_window(self):
+        """Get information about the next entry window"""
+        eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+        current_time = datetime.now(eastern_tz)
+        current_time_str = current_time.strftime("%H:%M")
+        
+        # Get entry windows from configuration
+        morning_start = self.trading_hours['morning_entry_start']
+        morning_end = self.trading_hours['morning_entry_end']
+        afternoon_start = self.trading_hours['afternoon_entry_start']
+        afternoon_end = self.trading_hours['afternoon_entry_end']
+        market_close = self.trading_hours['market_close']
+        
+        if current_time_str < morning_start:
+            return f"Next entry window: {morning_start}-{morning_end}"
+        elif morning_start <= current_time_str <= morning_end:
+            return f"Currently in morning entry window ({morning_start}-{morning_end})"
+        elif morning_end < current_time_str < afternoon_start:
+            return f"Next entry window: {afternoon_start}-{afternoon_end}" 
+        elif afternoon_start <= current_time_str <= afternoon_end:
+            return f"Currently in afternoon entry window ({afternoon_start}-{afternoon_end})"
+        elif afternoon_end < current_time_str < market_close:
+            return f"No more entry windows today. Market closes at {market_close}"
+        else:
+            return f"Market closed. Next entry window: {morning_start}-{morning_end} tomorrow"
+    
+    def load_from_database(self):
+        """Load existing strategy data from database and ensure boolean values are properly set"""
+        try:
+            db_data = trades_db.get_latest_strategy_data(self.stock)
+            if db_data:
+                # Ensure boolean fields are properly converted
+                self.position_active = bool(db_data.get('position_active', False))
+                self.additional_checks_passed = bool(db_data.get('additional_checks_passed', False))
+                
+                # Load other fields
+                self.score = db_data.get('score', 0)
+                self.position_shares = db_data.get('position_shares', 0)
+                self.current_price = db_data.get('current_price', 0)
+                self.entry_price = db_data.get('entry_price', 0)
+                self.stop_loss_price = db_data.get('stop_loss_price', 0)
+                self.take_profit_price = db_data.get('take_profit_price', 0)
+                self.used_margin = db_data.get('used_margin', 0)
+                self.pnl = db_data.get('pnl', 0)
+                
+                # Convert timestamp strings back to datetime objects if needed
+                if db_data.get('entry_time'):
+                    try:
+                        self.entry_time = datetime.fromisoformat(db_data['entry_time'])
+                    except (ValueError, TypeError):
+                        self.entry_time = None
+                
+                if db_data.get('close_time'):
+                    try:
+                        self.close_time = datetime.fromisoformat(db_data['close_time'])
+                    except (ValueError, TypeError):
+                        self.close_time = None
+                
+                print(f"Loaded existing data for {self.stock}: position_active={self.position_active}, additional_checks_passed={self.additional_checks_passed}")
+        except Exception as e:
+            print(f"Error loading data from database for {self.stock}: {e}")
+            # Ensure boolean fields are properly initialized
+            self.position_active = False
+            self.additional_checks_passed = False
         
     
     def fetch_data_by_timeframe(self):
@@ -128,32 +218,11 @@ class Strategy:
         # Calculate indicators for each timeframe
         self.calculate_indicators_by_timeframe()
         
-        # # Save all data to CSV for analysis
-        # self.save_data_to_csv()
-        
         # Calculate Alpha Score
         self.calculate_alpha_score()
         
         self.perform_additional_checks()
-    
-    def save_data_to_csv(self):
-        """Save all timeframe data and indicators to CSV files"""
-        timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
         
-        for tf_name in self.data.keys():
-            if not self.data[tf_name].empty:
-                # Save raw data
-                data_filename = f"data_{self.stock}_{tf_name}_{timestamp}.csv"
-                self.data[tf_name].to_csv(data_filename, index=True)
-                print(f"Raw data saved: {data_filename}")
-                
-                # Save indicators
-                if tf_name in self.indicators:
-                    indicators_df = pd.DataFrame(self.indicators[tf_name])
-                    indicators_filename = f"indicators_{self.stock}_{tf_name}_{timestamp}.csv"
-                    indicators_df.to_csv(indicators_filename, index=True)
-                    print(f"Indicators saved: {indicators_filename}")
-    
     def calculate_alpha_score(self):
         """Calculate Alpha Score based on configurable parameters"""
         self.score = 0
@@ -183,6 +252,9 @@ class Strategy:
             print(f"Score +{self.alpha_score_config['market_calm']['weight']} (Market Calm conditions met)")
         
         print(f"\nFinal Alpha Score: {self.score}")
+        
+        # Update database with alpha score
+        trades_db.update_strategy_data(self.stock, score=self.score)
     
     def _check_trend_conditions(self):
         """Check trend conditions"""
@@ -263,6 +335,9 @@ class Strategy:
         self.additional_checks_passed = volume_check and vwap_slope_check
         
         print(f"\nAdditional Checks Passed: {self.additional_checks_passed}")
+        
+        # Update database with additional checks status
+        trades_db.update_strategy_data(self.stock, additional_checks_passed=self.additional_checks_passed)
     
     def _check_vwap_slope(self):
         """Check VWAP slope condition"""
@@ -280,9 +355,7 @@ class Strategy:
         
         print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
         
-        return slope_ok
-
-        
+        return slope_ok 
         
     def calculate_position_size(self):
         """Calculate position size based on risk management rules"""
@@ -306,7 +379,7 @@ class Strategy:
         shares = int(risk_per_trade / risk_per_share)
         
         # Apply position size limits (up to 10% equity)
-        max_shares_by_equity = int((account_equity * 0.10) / current_price)
+        max_shares_by_equity = int((account_equity * creds.RISK_CONFIG['max_position_size']) / current_price)
         shares = max(shares, max_shares_by_equity)
         
         # # Apply micro-lot sizing (4-5% chunks)
@@ -317,10 +390,16 @@ class Strategy:
         # shares = micro_lot_size
         
         # Calculate limit order price: VWAP+/- (0.03%-0.07% random)
+        # Ensure VWAP is below current price before using it
         data_3min = self.broker.get_historical_data(3, self.stock)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
         
-        offset_pct = random.uniform(0.0003, 0.0007)  # 0.03% to 0.07%
+        # Check if VWAP is below current price (required condition)
+        if vwap_value >= current_price:
+            print(f"WARNING: VWAP (${vwap_value:.2f}) is NOT below current price (${current_price:.2f}) - skipping order")
+            return 0, 0, 0, 0  # Don't place order if VWAP condition not met
+        
+        offset_pct = random.uniform(creds.ORDER_CONFIG['limit_offset_min'], creds.ORDER_CONFIG['limit_offset_max'])  # 0.03% to 0.07%
         limit_price = vwap_value * (1 + offset_pct)  # Slightly above VWAP for buy orders
         
         print(f"Position Size: {shares} shares")
@@ -329,22 +408,28 @@ class Strategy:
         print(f"VWAP: ${vwap_value:.2f}")
         print(f"Limit Order Price: ${limit_price:.2f} (VWAP + {offset_pct*100:.3f}%)")
         
+        # Update database with current price and position calculations
+        trades_db.update_strategy_data(self.stock, 
+            current_price=current_price,
+            stop_loss_price=stop_loss_price
+        )
+        
         return shares, current_price, stop_loss_price, limit_price
     
     def calculate_stop_loss(self, current_price):
         """Calculate stop loss percentage based on volatility"""
         data_3min = self.broker.get_historical_data(3, self.stock)
-        atr14 = atr.calc_atr(data_3min)
+        atr14 = atr.calc_atr(data_3min, creds.STOP_LOSS_CONFIG['atr_period'])
         atr14 = atr14.iloc[-1]
 
-        base_stop = 0.015
+        base_stop = creds.STOP_LOSS_CONFIG['default_stop_loss']
         
-        atr_stop = (atr14 * 1.5) / current_price
+        atr_stop = (atr14 * creds.STOP_LOSS_CONFIG['atr_multiplier']) / current_price
         print(f"ATR Stop: {atr_stop:.3f}")
         
         stop_loss = max(base_stop, atr_stop)
         
-        stop_loss = min(stop_loss, 0.04)
+        stop_loss = min(stop_loss, creds.STOP_LOSS_CONFIG['max_stop_loss'])
         
         return stop_loss
 
@@ -353,8 +438,8 @@ class Strategy:
         print(f"Additional Checks Passed: {self.additional_checks_passed}")
         
         # Both conditions must be met to place an order
-        if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and self.additional_checks_passed:
-            print("ENTERING POSITION - Both Alpha Score >= 85 AND additional checks passed")
+        if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and bool(self.additional_checks_passed):
+            print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG['alpha_score_threshold']} AND additional checks passed")
             shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
             if shares > 0:
                 print(f"Order Details:")
@@ -364,38 +449,31 @@ class Strategy:
                 print(f"  - Stop Loss: ${stop_loss:.2f}")
                 print(f"  - Exit: Market-On-Close at 4:00 PM ET")
                 
-                # Add to qualifying stocks list in manager
-                stock_data = {
-                    'symbol': self.stock,
-                    'alpha_score': self.score,
-                    'entry_price': entry_price,
-                    'stop_loss': stop_loss,
-                    'shares': shares,
-                    'limit_price': limit_price,
-                    'timestamp': pd.Timestamp.now()
-                }
-                self.manager.add_qualifying_stock(stock_data)
+                # Get current time in USA Eastern Time
+                eastern_tz = pytz.timezone('America/New_York')
+                curr_time = datetime.now(eastern_tz)
+                target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG['order_window'])
                 
-                # Place actual order using StrategyBroker
-                try:
-                    # Place limit buy order with SL and TP as 0 (will be managed by monitoring system)
-                    order_id, executed_price = self.broker.place_order(
-                        symbol=self.stock,
-                        qty=shares,
-                        order_type='LIMIT',
-                        price=limit_price,  # Use limit_price for limit order
-                        stop_loss=0,  # SL will be managed by monitoring system
-                        take_profit=0  # TP will be managed by monitoring system
-                    )
+                while curr_time < target_time:
+                    self.current_price = self.broker.get_current_price(self.stock)
+                    print(f"Current price: {self.current_price}")
                     
-                    if order_id:
-                        print("ORDER PLACED SUCCESSFULLY:")
-                        print(f"  - Order ID: {order_id}")
-                        print(f"  - Symbol: {self.stock}")
-                        print(f"  - Shares: {shares}")
-                        print(f"  - Limit Price: ${limit_price:.2f}")
-                        print(f"  - Stop Loss: Managed by monitoring system")
-                        print(f"  - Take Profit: Managed by monitoring system")
+                    # Check if current_price is None before comparison
+                    if self.current_price is None:
+                        print(f"Unable to get current price for {self.stock}, retrying...")
+                        time.sleep(1)
+                        continue
+                    
+                    if self.current_price >= limit_price:                
+                        stock_data = {
+                            'symbol': self.stock,
+                            'alpha_score': self.score,
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'shares': shares,
+                            'limit_price': limit_price,
+                            'timestamp': pd.Timestamp.now()
+                        }
 
                         with self.manager_lock:
                             self.used_capital += shares * limit_price
@@ -406,10 +484,12 @@ class Strategy:
                         # Initialize position tracking variables
                         self.entry_price = limit_price
                         self.stop_loss_price = stop_loss
-                        self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.get('take_profit_pct', 0.10))  # Default 10% TP
+                        self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG['profit_booking_levels'][0]['gain'])  # Use 1% from profit booking levels
                         self.position_shares = shares
                         self.position_active = True
-                        self.entry_time = datetime.now()
+                        # Get current time in USA Eastern Time
+                        eastern_tz = pytz.timezone('America/New_York')
+                        self.entry_time = datetime.now(eastern_tz)
                         self.current_price = limit_price
                         self.pnl = 0.0
                         print(f"Position tracking initialized for {self.stock}:")
@@ -418,41 +498,74 @@ class Strategy:
                         print(f"  - Take Profit: ${self.take_profit_price:.2f}")
                         print(f"  - Entry Time: {self.entry_time}")
                         
-
-                    else:
-                        print(f"FAILED TO PLACE ORDER for {self.stock}")
+                        # Update database with position initialization
+                        trades_db.update_strategy_data(self.stock,
+                            position_active=True,
+                            position_shares=shares,
+                            entry_price=self.entry_price,
+                            stop_loss_price=self.stop_loss_price,
+                            take_profit_price=self.take_profit_price,
+                            entry_time=self.entry_time,
+                            current_price=self.current_price,
+                            pnl=self.pnl,
+                            used_margin=self.used_margin
+                        )
                         
-                except Exception as e:
-                    print(f"ERROR PLACING ORDER for {self.stock}: {str(e)}")
+                        return shares, entry_price, stop_loss, limit_price
+                    else:
+                        print(f"Current price: {self.current_price} is not >= limit price: {limit_price}")
+                        time.sleep(1)
+                        continue
+                else:
+                    print("Order not filled on time")    
+                    return -1
                 
-                return shares, entry_price, stop_loss, limit_price
         else:
             if self.score < 85:
                 print(f"Alpha Score too low: {self.score} < 85")
-            if not self.additional_checks_passed:
+            if not bool(self.additional_checks_passed):
                 print("Additional checks failed")
-        return 0, 0, 0, 0
+        return -1
                     
     def run(self, i):
-        self.calculate_indicators()
-        self.process_score()
+        while True:
+            # Check if we're in entry time windows
+            if self.is_entry_time_window():
+                print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
+                self.calculate_indicators()
+                self.process_score()
+            else:
+                # Outside entry windows - only monitor existing positions
+                window_status = self.get_next_entry_window()
+                print(f"[{self.stock}] {window_status} - only monitoring existing positions")
+                
+            # Always monitor active positions regardless of time
+            if self.position_active and self.position_shares > 0:
+                print(f"Starting position monitoring for {self.stock}...")
+                self.start_individual_monitoring()
+            
+            # Sleep for a bit before next iteration if no active position
+            if not self.position_active:
+                time.sleep(30)  # Wait 30 seconds before checking again
         
-        # Start monitoring this individual stock's position
-        if hasattr(self, 'position_active') and self.position_active:
-            print(f"Starting position monitoring for {self.stock}...")
-            self.start_individual_monitoring()
+        # self.calculate_indicators()
+        # self.process_score()
     
     def monitor_position(self):
         """Monitor position for stop loss and take profit conditions"""
-        if not hasattr(self, 'position_active') or not self.position_active:
-            return
-        
         try:
             # Get current price and update tracking variables
             self.current_price = self.broker.get_current_price(self.stock)
             
+            # Check if current_price is None
+            if self.current_price is None:
+                print(f"Unable to get current price for {self.stock} in position monitoring")
+                return
+            
             # Calculate current PnL
             self.pnl = (self.current_price - self.entry_price) * self.position_shares
+            with self.manager.manager_lock:
+                self.manager.unrealized_pnl += self.pnl
             
             # Calculate current gain/loss percentage
             current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
@@ -463,43 +576,149 @@ class Strategy:
                 self.close_position('stop_loss', self.current_price)
                 return
             
-            # Check take profit condition
-            if self.current_price >= self.take_profit_price:
-                print(f"TAKE PROFIT TRIGGERED: {self.stock} - Current: ${self.current_price:.2f}, Target: ${self.take_profit_price:.2f}")
-                self.close_position('take_profit', self.current_price)
-                return
-            
-            # Check profit booking levels
-            self._check_profit_booking(current_gain_pct, self.current_price)
-            
-            # Check trailing stop levels
-            self._check_trailing_stops(current_gain_pct, self.current_price)
-            
-            # Check trailing exit conditions
-            self._check_trailing_exit(current_gain_pct, self.current_price)
+            self.check_take_profit()
 
             if self.manager.stop_event.is_set():
                 self.close_position('drawdown', self.current_price)
 
-            # Print position status every 10 iterations (every ~100 seconds)
-            if hasattr(self, '_monitor_counter'):
-                self._monitor_counter += 1
-            else:
-                self._monitor_counter = 1
-                
-            if self._monitor_counter % 10 == 0:
-                print(f"Position Status - {self.stock}:")
-                print(f"  - Current Price: ${self.current_price:.2f}")
-                print(f"  - Entry Price: ${self.entry_price:.2f}")
-                print(f"  - PnL: ${self.pnl:.2f} ({current_gain_pct*100:.2f}%)")
-                print(f"  - Shares: {self.position_shares}")
-                print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
-                print(f"  - Take Profit: ${self.take_profit_price:.2f}")
+            print(f"Position Status - {self.stock}:")
+            print(f"  - Current Price: ${self.current_price:.2f}")
+            print(f"  - Entry Price: ${self.entry_price:.2f}")
+            print(f"  - PnL: ${self.pnl:.2f} ({current_gain_pct*100:.2f}%)")
+            print(f"  - Shares: {self.position_shares}")
+            print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
+            print(f"  - Take Profit: ${self.take_profit_price:.2f}")
+            
+            # Update database with current position status
+            trades_db.update_strategy_data(self.stock,
+                current_price=self.current_price,
+                pnl=self.pnl,
+                position_shares=self.position_shares,
+                stop_loss_price=self.stop_loss_price,
+                take_profit_price=self.take_profit_price
+            )
             
         except Exception as e:
             print(f"Error monitoring position for {self.stock}: {e}")
+
+    def check_take_profit(self):
+        current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
+
+        # Profit Booking Logic using PROFIT_CONFIG
+        for i, level in enumerate(creds.PROFIT_CONFIG['profit_booking_levels']):
+            gain_threshold = level['gain']
+            exit_pct = level['exit_pct']
+            
+            # Check if we haven't already booked profit at this level
+            if current_gain_pct >= gain_threshold:
+                shares_to_sell = int(self.position_shares * exit_pct)
+                if shares_to_sell > 0:
+                    self.close_position(f'profit_booking_{i+1}', shares_to_sell)
+                    print(f"Profit Booking {i+1}: Sold {shares_to_sell} shares at {gain_threshold*100:.1f}% gain")
+                    
+                    # Update database with profit booking
+                    trades_db.update_strategy_data(self.stock,
+                        profit_booked_flags={f'profit_booked_{i+1}': True}
+                    )
+        
+        # Trailing Stop Logic using STOP_LOSS_CONFIG
+        for i, level in enumerate(creds.STOP_LOSS_CONFIG['trailing_stop_levels']):
+            gain_threshold = level['gain']
+            new_stop_pct = level['new_stop_pct']
+            
+            # Check if we haven't already set trailing stop at this level
+            if current_gain_pct >= gain_threshold:
+                new_stop_price = self.entry_price * (1 + new_stop_pct)
+                if new_stop_price > self.stop_loss_price:
+                    self.stop_loss_price = new_stop_price
+                    print(f"Trailing Stop {i+1}: Moved stop loss to +{new_stop_pct*100:.2f}% (${self.stop_loss_price:.2f})")
+                    
+                    # Update database with trailing stop
+                    trades_db.update_strategy_data(self.stock,
+                        stop_loss_price=self.stop_loss_price,
+                        trailing_stop_flags={f'trailing_stop_{i+1}_set': True}
+                    )
+
+        # Trailing Exit Logic using PROFIT_CONFIG
+        trailing_conditions = creds.PROFIT_CONFIG['trailing_exit_conditions']
+        gain_threshold = trailing_conditions['gain_threshold']
+        drop_threshold = trailing_conditions['drop_threshold']
+        monitor_period = trailing_conditions['monitor_period']
+        
+        if current_gain_pct >= gain_threshold:
+            # Start monitoring if not already started
+            if not self.trailing_exit_monitoring:
+                self.trailing_exit_monitoring = True
+                # Get current time in USA Eastern Time
+                eastern_tz = pytz.timezone('America/New_York')
+                self.trailing_exit_start_time = datetime.now(eastern_tz)
+                self.trailing_exit_start_price = self.current_price
+                print(f"Starting trailing exit monitoring at {gain_threshold*100:.1f}% gain")
+                
+                # Update database with trailing exit monitoring
+                trades_db.update_strategy_data(self.stock,
+                    trailing_exit_monitoring=True,
+                    trailing_exit_start_time=self.trailing_exit_start_time,
+                    trailing_exit_start_price=self.trailing_exit_start_price
+                )
+                
+                # Start continuous monitoring for sustained drop - inline while loop
+                monitor_period_seconds = monitor_period * 60  # Convert minutes to seconds
+                print(f"Starting continuous monitoring for {monitor_period_seconds}s sustained drop of {drop_threshold*100:.1f}%")
+                drop_sustained_start_time = None
+                
+                while True:
+                    try:
+                        # Update current price
+                        self.current_price = self.broker.get_current_price(self.stock)
+                        if self.current_price is None:
+                            print(f"Unable to get current price for {self.stock}, retrying...")
+                            time.sleep(1)
+                            continue
+                        
+                        # Calculate current price drop
+                        price_drop = (self.trailing_exit_start_price - self.current_price) / self.trailing_exit_start_price
+                        current_time = datetime.now(eastern_tz)
+                        
+                        if price_drop >= drop_threshold:
+                            # Price drop meets threshold
+                            if drop_sustained_start_time is None:
+                                # First time drop threshold is met - start tracking
+                                drop_sustained_start_time = current_time
+                                print(f"Price drop {price_drop*100:.2f}% >= {drop_threshold*100:.1f}% threshold - starting sustained drop timer")
+                            else:
+                                # Check if drop has been sustained for the required period
+                                sustained_time_seconds = (current_time - drop_sustained_start_time).total_seconds()
+                                if sustained_time_seconds >= monitor_period_seconds:
+                                    print(f"Trailing Exit: {monitor_period_seconds}s sustained drop of {price_drop*100:.2f}% >= {drop_threshold*100:.1f}%, closing position")
+                                    self.close_position('trailing_exit', self.position_shares)
+                                    return  # Exit the monitoring loop
+                                else:
+                                    print(f"Sustained drop for {sustained_time_seconds:.0f}/{monitor_period_seconds}s - continuing to monitor")
+                        else:
+                            # Price drop is below threshold - reset sustained drop timer
+                            if drop_sustained_start_time is not None:
+                                print(f"Price drop {price_drop*100:.2f}% < {drop_threshold*100:.1f}% threshold - resetting sustained drop timer")
+                                drop_sustained_start_time = None
+                        
+                        # Check if position is still active (in case it was closed by other means)
+                        if not self.position_active:
+                            print("Position no longer active - exiting sustained drop monitoring")
+                            return
+                        
+                        # Sleep for 1 second before next check
+                        time.sleep(1)
+                        
+                    except Exception as e:
+                        print(f"Error in sustained drop monitoring for {self.stock}: {e}")
+                        time.sleep(1)
+                        continue
     
-    def close_position(self, reason, current_price, shares_to_sell=None):
+
+
+
+    
+    def close_position(self, reason, shares_to_sell=None):
         """
         Close position (either partial or full)
         
@@ -508,69 +727,67 @@ class Strategy:
             current_price: Current market price
             shares_to_sell: Number of shares to sell (None for all remaining shares)
         """
-        try:
-            # Determine shares to sell
-            if shares_to_sell is None:
-                shares_to_sell = self.position_shares
-            
-            # Ensure we don't sell more than we have
-            shares_to_sell = min(shares_to_sell, self.position_shares)
-            
-            if shares_to_sell <= 0:
-                print(f"No shares to sell for {self.stock}")
-                return
-            
-            # Calculate PnL for this trade
-            trade_pnl = (current_price - self.entry_price) * shares_to_sell
-            
-            # Place sell order
-            order_id, executed_price = self.broker.place_order(
-                symbol=self.stock,
-                qty=shares_to_sell,  # Positive quantity
-                order_type='MARKET',
-                price=None,
-                stop_loss=0,
-                take_profit=0,
-                side='SELL'
-            )
-            
-            if order_id:
-                print(f"{reason.upper()} EXECUTED: {self.stock} - {shares_to_sell} shares at ${current_price:.2f}")
-                print(f"Order ID: {order_id}")
-                print(f"Trade PnL: ${trade_pnl:.2f}")
+
+        current_price = self.broker.get_current_price(self.stock)
+        
+        if shares_to_sell is None:
+            shares_to_sell = self.position_shares
+
+        # Ensure we don't sell more than we have
+        shares_to_sell = min(shares_to_sell, self.position_shares)
+
+        if shares_to_sell <= 0:
+            print(f"No shares to sell for {self.stock}")
+            return
+
+        # Update remaining shares
+        self.position_shares -= shares_to_sell
+
+        if self.position_shares <= 0:
+            self.position_active = False
+            # Get current time in USA Eastern Time
+            eastern_tz = pytz.timezone('America/New_York')
+            self.close_time = datetime.now(eastern_tz)
+            self.pnl = (current_price - self.entry_price) * shares_to_sell
+            with self.manager.manager_lock:
+                self.manager.realized_pnl += self.pnl
+                self.manager.unrealized_pnl -= self.pnl
+
+            # Calculate position duration
+            if self.entry_time:
+                duration = self.close_time - self.entry_time
+                print(f"Position fully closed for {self.stock}")
+                print(f"Position Summary:")
+                print(f"  - Entry Time: {self.entry_time}")
+                print(f"  - Exit Time: {self.close_time}")
+                print(f"  - Duration: {duration}")
+                print(f"  - Entry Price: ${self.entry_price:.2f}")
+                print(f"  - Exit Price: ${current_price:.2f}")
+                print(f"  - Total PnL: ${self.pnl:.2f}")
+                print(f"  - Return: {((current_price - self.entry_price) / self.entry_price * 100):.2f}%")
+                print(f"  - Reason: {reason}")
                 
-                # Update remaining shares
-                self.position_shares -= shares_to_sell
+                # Update database with position closure
+                trades_db.update_strategy_data(self.stock,
+                    position_active=False,
+                    position_shares=0,
+                    close_time=self.close_time,
+                    pnl=self.pnl,
+                    current_price=current_price
+                )
+        else:
+            print(f"Partial position closed. Remaining shares: {self.position_shares}")
+            # Update PnL for remaining position
+            self.pnl = (current_price - self.entry_price) * self.position_shares
+            with self.manager.manager_lock:
+                self.manager.realized_pnl += self.pnl
                 
-                # If all shares sold, close position completely
-                if self.position_shares <= 0:
-                    self.position_active = False
-                    self.close_time = datetime.now()
-                    self.pnl = (current_price - self.entry_price) * shares_to_sell  # Final PnL
-                    
-                    # Calculate position duration
-                    if self.entry_time:
-                        duration = self.close_time - self.entry_time
-                        print(f"Position fully closed for {self.stock}")
-                        print(f"Position Summary:")
-                        print(f"  - Entry Time: {self.entry_time}")
-                        print(f"  - Exit Time: {self.close_time}")
-                        print(f"  - Duration: {duration}")
-                        print(f"  - Entry Price: ${self.entry_price:.2f}")
-                        print(f"  - Exit Price: ${current_price:.2f}")
-                        print(f"  - Total PnL: ${self.pnl:.2f}")
-                        print(f"  - Return: {((current_price - self.entry_price) / self.entry_price * 100):.2f}%")
-                        print(f"  - Reason: {reason}")
-                else:
-                    print(f"Partial position closed. Remaining shares: {self.position_shares}")
-                    # Update PnL for remaining position
-                    self.pnl = (current_price - self.entry_price) * self.position_shares
-            else:
-                print(f"Failed to place {reason} order for {self.stock}")
-                
-        except Exception as e:
-            print(f"Error executing {reason} for {self.stock}: {e}")
-    
+            # Update database with partial position closure
+            trades_db.update_strategy_data(self.stock,
+                position_shares=self.position_shares,
+                pnl=self.pnl,
+                current_price=current_price
+            ) 
     
     def _check_profit_booking(self, current_gain_pct, current_price):
         """Check profit booking levels"""
@@ -611,17 +828,19 @@ class Strategy:
         
         if current_gain_pct >= exit_config['gain_threshold']:
             # Check if we should exit based on price drop
-            # This is a simplified version - you might want to track max price over time
-            if not hasattr(self, 'trailing_start_time'):
-                self.trailing_start_time = datetime.now()
-                self.max_price_since_trailing = current_price
-                print(f"TRAILING EXIT MONITORING: {self.stock} - Started monitoring for exit conditions")
+            # Get current time in USA Eastern Time
+            eastern_tz = pytz.timezone('America/New_York')
+            self.trailing_start_time = datetime.now(eastern_tz)
+            self.max_price_since_trailing = current_price
+            print(f"TRAILING EXIT MONITORING: {self.stock} - Started monitoring for exit conditions")
             
             # Update max price
             self.max_price_since_trailing = max(self.max_price_since_trailing, current_price)
             
             # Check time and price drop
-            time_since_trailing = datetime.now() - self.trailing_start_time
+            # Get current time in USA Eastern Time for calculation
+            eastern_tz = pytz.timezone('America/New_York')
+            time_since_trailing = datetime.now(eastern_tz) - self.trailing_start_time
             if time_since_trailing.total_seconds() <= exit_config['monitor_period'] * 60:
                 price_drop = (self.max_price_since_trailing - current_price) / self.max_price_since_trailing
                 if price_drop >= exit_config['drop_threshold']:
@@ -667,7 +886,7 @@ class Strategy:
             'pnl': self.pnl,
             'pnl_pct': ((self.current_price - self.entry_price) / self.entry_price * 100) if self.entry_price > 0 else 0,
             'entry_time': self.entry_time,
-            'duration': (datetime.now() - self.entry_time) if self.entry_time else None
+            'duration': (datetime.now(pytz.timezone('America/New_York')) - self.entry_time) if self.entry_time else None
         }
     
     def print_position_summary(self):
@@ -701,6 +920,20 @@ class Strategy:
         self.pnl = 0
         self.entry_time = None
         self.close_time = None
+        
+        # Update database with reset
+        trades_db.update_strategy_data(self.stock,
+            position_active=False,
+            position_shares=0,
+            current_price=0,
+            entry_price=0,
+            stop_loss_price=0,
+            take_profit_price=0,
+            pnl=0,
+            entry_time=None,
+            close_time=None
+        )
+        
         print(f"Position tracking reset for {self.stock}")
     
 
@@ -737,7 +970,6 @@ class StrategyBroker:
                 df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
                 df.set_index("datetime", inplace=True)
 
-                print(df)
                 return df
             else:
                 print("No data received from broker")
@@ -769,7 +1001,6 @@ class StrategyBroker:
                     'volume': 'sum'
                 }).dropna()
 
-                print(df_min)
                 return df_min
             else:
                 print("No data received from broker")
@@ -870,12 +1101,13 @@ class StrategyManager:
         self.config = creds
         self.selector = StockSelector()
         self.manager_lock = threading.Lock()
-        self.used_capital = 0 
-
-        drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
-        drawdown_thread.start()
+        self.used_capital = 0
+        self.realized_pnl = 0
+        self.unrealized_pnl = 0
+        
+        # Create stop event BEFORE starting the thread
         self.stop_event = threading.Event()
-    
+
         try:
             self.stocks_list, self.stocks_dict = self.selector.run()
             print(f"Stock selector returned {len(self.stocks_list)} stocks")
@@ -889,16 +1121,24 @@ class StrategyManager:
         # List to track stocks that pass all entry conditions
         self.qualifying_stocks = []
         self.qualifying_stocks_lock = threading.Lock()  # Thread-safe access
+        
+        # Start drawdown monitoring thread AFTER everything is initialized
+        drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
+        drawdown_thread.start()
     
     def monitor_drawdown_loop(self):
             print("Starting global drawdown monitoring thread.")
             threshold = creds.EQUITY * creds.RISK_CONFIG['daily_drawdown_limit']
+            self.max_drawdown_triggered = False  # Initialize the attribute
+            
             while not self.stop_event.is_set():
-                with self.lock:
+                try:
                     total_pnl = self.broker.get_total_pnl()  # Must return realized + unrealized
 
                     print(f"[Drawdown] PnL: {total_pnl:.2f}, Threshold: {-threshold}")
-                    now = datetime.now()
+                    # Get current time in USA Eastern Time
+                    eastern_tz = pytz.timezone('America/New_York')
+                    now = datetime.now(eastern_tz)
                     current_time_str = now.strftime("%H:%M")
                     
                     if total_pnl <= -threshold and not self.max_drawdown_triggered:
@@ -906,13 +1146,15 @@ class StrategyManager:
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
                         
-                    if current_time_str >= self.config.EXIT_TIME:
-                        print("Exit time reached")
+                    if current_time_str >= self.config.TRADING_HOURS['market_close']:
+                        print(f"Exit time reached at {current_time_str} ET")
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
-                        
-
-                time.sleep(5)
+                            
+                    time.sleep(5)
+                except Exception as e:
+                    print(f"Error in drawdown monitoring: {e}")
+                    time.sleep(5)
 
     def run(self):
         self.threads = []
@@ -920,6 +1162,8 @@ class StrategyManager:
         print("Start")
         for i, stock in enumerate(self.stocks_list):
             print(f"{i}:{stock} ")
+            
+        self.print_qualifying_stocks()
         
         for i, stock in enumerate(self.stocks_list):
             strategy = Strategy(self, stock, self.broker, self.config)
@@ -938,25 +1182,196 @@ class StrategyManager:
             print(f"Strategy {i+1} completed")
         
         # Print final qualifying stocks summary
-        self.print_qualifying_stocks()
 
     def test(self):
+        """Test the database integration and strategy functionality"""
+        print("🧪 Starting Database Integration Test...")
         
-        current_price = self.broker.get_current_price("AAPL")
-        self.broker.place_order(
-            symbol="AAPL",
-            qty=100,
-            order_type='LIMIT',
-            price=current_price + 0.01,
-            stop_loss=0,
-            take_profit=0,
-            side='BUY'
-        )
-
-        while not self.broker.filled_check("AAPL"):
-            print("AAPL not filled")
-            time.sleep(1)
-        print("AAPL filled")
+        # Test 1: Check if database is initialized with stocks
+        print("\n1. Testing Database Initialization...")
+        summary_data = trades_db.get_strategy_summary()
+        if summary_data:
+            print(f"Database initialized with {len(summary_data)} stocks")
+            for stock in summary_data[:3]:  # Show first 3 stocks
+                print(f"   - {stock['symbol']}: Score={stock['score']}, Active={stock['position_active']}")
+        else:
+            print("No data found in database")
+        
+        # Test 2: Create a test strategy and update database
+        print("\n2. Testing Strategy Database Updates...")
+        test_stock = "META"
+        trades_db.add_stocks_from_list([test_stock])
+        test_strategy = Strategy(self, test_stock, self.broker, self.config)
+        
+        # Simulate strategy calculations
+        print(f"   Testing with {test_stock}...")
+        
+        # Test alpha score calculation
+        test_strategy.calculate_indicators()
+        test_strategy.calculate_alpha_score()
+        test_strategy.perform_additional_checks()
+        
+        print(f"   Alpha Score: {test_strategy.score}")
+        print(f"   Additional Checks: {bool(test_strategy.additional_checks_passed)}")
+        
+        # Test position size calculation
+        shares, entry_price, stop_loss, limit_price = test_strategy.calculate_position_size()
+        print(f"   Calculated Position: {shares} shares @ ${entry_price:.2f}")
+        print(f"   Stop Loss: ${stop_loss:.2f}")
+        print(f"   Limit Price: ${limit_price:.2f}")
+        
+        # Test 3: Check database updates
+        print("\n3. Verifying Database Updates...")
+        latest_data = trades_db.get_latest_strategy_data(test_stock)
+        if latest_data:
+            print(f" Database updated for {test_stock}")
+            print(f"   - Score: {latest_data['score']}")
+            print(f"   - Current Price: ${latest_data['current_price']:.2f}")
+            print(f"   - Stop Loss: ${latest_data['stop_loss_price']:.2f}")
+            print(f"   - Position Active: {bool(latest_data['position_active'])}")
+        else:
+            print(f"No database data found for {test_stock}")
+        
+        # Test 4: Place limit order and wait for price to reach limit
+        print("\n4. Placing Limit Order and Waiting for Fill...")
+        if shares > 0:
+            print(f"   Waiting for price to reach limit price: ${limit_price:.2f}")
+            print(f"   Order window: {creds.ORDER_CONFIG['order_window']} seconds")
+            
+            # Get current time in USA Eastern Time
+            eastern_tz = pytz.timezone('America/New_York')
+            curr_time = datetime.now(eastern_tz)
+            target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG['order_window'])
+            
+            order_filled = False
+            while curr_time < target_time and not order_filled:
+                current_price = test_strategy.broker.get_current_price(test_stock)
+                limit_price = current_price 
+                print(f"   Current price: ${current_price:.2f} | Limit price: ${limit_price:.2f}")
+                
+                # Check if current_price is None before comparison
+                if current_price is None:
+                    print(f"   Unable to get current price for {test_stock}, retrying...")
+                    time.sleep(1)
+                    curr_time = datetime.now(eastern_tz)
+                    continue
+                
+                if current_price >= limit_price:
+                    print(f"ORDER FILLED! Current price ${current_price:.2f} >= Limit price ${limit_price:.2f}")
+                    
+                    # Initialize position tracking variables (same as process_score)
+                    test_strategy.entry_price = limit_price
+                    test_strategy.stop_loss_price = stop_loss
+                    test_strategy.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG['profit_booking_levels'][0]['gain'])
+                    test_strategy.position_shares = shares
+                    test_strategy.position_active = True
+                    test_strategy.entry_time = datetime.now(eastern_tz)
+                    test_strategy.current_price = limit_price
+                    test_strategy.pnl = 0.0
+                    
+                    # Update database with position initialization
+                    trades_db.update_strategy_data(test_stock,
+                        position_active=True,
+                        position_shares=shares,
+                        entry_price=test_strategy.entry_price,
+                        stop_loss_price=test_strategy.stop_loss_price,
+                        take_profit_price=test_strategy.take_profit_price,
+                        entry_time=test_strategy.entry_time,
+                        current_price=test_strategy.current_price,
+                        pnl=test_strategy.pnl
+                    )
+                    
+                    print(f"   Position initialized for {test_stock}:")
+                    print(f"   - Entry Price: ${test_strategy.entry_price:.2f}")
+                    print(f"   - Stop Loss: ${test_strategy.stop_loss_price:.2f}")
+                    print(f"   - Take Profit: ${test_strategy.take_profit_price:.2f}")
+                    print(f"   - Entry Time: {test_strategy.entry_time}")
+                    
+                    order_filled = True
+                    break
+                else:
+                    print(f"   Waiting... Current price ${current_price:.2f} < Limit price ${limit_price:.2f}")
+                    time.sleep(1)
+                    curr_time = datetime.now(eastern_tz)
+            
+            if not order_filled:
+                print("Order not filled within time window")
+                return
+        
+        # Test 5: Check active positions
+        print("\n5. Testing Active Positions Query...")
+        active_positions = trades_db.get_all_active_positions()
+        if active_positions:
+            print(f"Found {len(active_positions)} active positions")
+            for pos in active_positions:
+                print(f"   - {pos['symbol']}: {pos['position_shares']} shares @ ${pos['entry_price']:.2f}")
+        else:
+            print("No active positions found")
+        
+        # Test 6: Simulate price movement and profit booking
+        print("\n6. Testing Profit Booking Logic...")
+        if shares > 0:
+            # Simulate price increase to trigger profit booking
+            test_strategy.current_price = entry_price * 1.02  # 2% gain
+            test_strategy.pnl = (test_strategy.current_price - test_strategy.entry_price) * shares
+            
+            print(f"   Simulating 2% price increase...")
+            print(f"   New Price: ${test_strategy.current_price:.2f}")
+            print(f"   PnL: ${test_strategy.pnl:.2f}")
+            
+            # Update database with new price
+            trades_db.update_strategy_data(test_stock,
+                current_price=test_strategy.current_price,
+                pnl=test_strategy.pnl
+            )
+            
+            # Test profit booking logic
+            test_strategy.check_take_profit()
+        
+        # Test 7: Final database summary
+        print("\n7. Final Database Summary...")
+        final_summary = trades_db.get_strategy_summary()
+        if final_summary:
+            test_stock_data = next((s for s in final_summary if s['symbol'] == test_stock), None)
+            if test_stock_data:
+                print(f" Final data for {test_stock}:")
+                print(f"   - Score: {test_stock_data['score']}")
+                print(f"   - Position Active: {bool(test_stock_data['position_active'])}")
+                print(f"   - Current Price: ${test_stock_data['current_price']:.2f}")
+                print(f"   - PnL: ${test_stock_data['pnl']:.2f}")
+        
+        print("\n Database Integration Test Complete!")
+        print(" Run 'streamlit run db_viewer.py' to view the dashboard")
+        
+        # Test 8: Test stop loss and take profit functionality
+        print("\n8. Testing Stop Loss and Take Profit...")
+        if test_strategy.position_active:
+            print(f"   Testing stop loss at ${test_strategy.stop_loss_price:.2f}")
+            print(f"   Testing take profit at ${test_strategy.take_profit_price:.2f}")
+            
+            # Simulate price movement to test SL/TP
+            test_strategy.current_price = test_strategy.stop_loss_price - 0.01  # Just below stop loss
+            test_strategy.pnl = (test_strategy.current_price - test_strategy.entry_price) * shares
+            
+            print(f"   Simulated price: ${test_strategy.current_price:.2f}")
+            print(f"   PnL: ${test_strategy.pnl:.2f}")
+            
+            # Update database with new price
+            trades_db.update_strategy_data(test_stock,
+                current_price=test_strategy.current_price,
+                pnl=test_strategy.pnl
+            )
+            
+            # Test stop loss logic
+            if test_strategy.current_price <= test_strategy.stop_loss_price:
+                print(f"Stop loss would trigger at this price")
+            else:
+                print(f"Stop loss not triggered yet")
+            
+            # Test take profit logic
+            test_strategy.check_take_profit()
+        else:
+            print("No active position to test SL/TP")
 
     
     def print_broker_summary(self):
@@ -994,48 +1409,32 @@ class StrategyManager:
                 print(f"  PnL: ${trade.pnl:.2f}, Commission: ${trade.commission:.2f}")
                 print(f"  Time: {trade.timestamp}")
                 print()
-    
 
-    
-
-    
-    def add_qualifying_stock(self, stock_data):
-        """Add a stock that passes all entry conditions to the qualifying list"""
-        with self.qualifying_stocks_lock:
-            self.qualifying_stocks.append(stock_data)
-            print(f"Added {stock_data['symbol']} to qualifying stocks list")
-            print(f"Total qualifying stocks: {len(self.qualifying_stocks)}")
-    
-    def get_qualifying_stocks(self):
-        """Get the current list of qualifying stocks"""
-        with self.qualifying_stocks_lock:
-            return self.qualifying_stocks.copy()
-    
-    def clear_qualifying_stocks(self):
-        """Clear the qualifying stocks list (e.g., at start of new day)"""
-        with self.qualifying_stocks_lock:
-            self.qualifying_stocks.clear()
-            print("Qualifying stocks list cleared")
-    
     def print_qualifying_stocks(self):
-        """Print the current qualifying stocks with their details"""
-        with self.qualifying_stocks_lock:
-            if not self.qualifying_stocks:
-                print("No qualifying stocks found")
-                return
-            
-            print(f"\n=== QUALIFYING STOCKS ({len(self.qualifying_stocks)}) ===")
-            for i, stock_data in enumerate(self.qualifying_stocks, 1):
-                print(f"{i}. {stock_data['symbol']}")
-                print(f"   Alpha Score: {stock_data['alpha_score']:.1f}")
-                print(f"   Entry Price: ${stock_data['entry_price']:.2f}")
-                print(f"   Stop Loss: ${stock_data['stop_loss']:.2f}")
-                print(f"   Shares: {stock_data['shares']}")
-                print(f"   Limit Price: ${stock_data['limit_price']:.2f}")
-                print()
+        """Print the current qualifying stocks with their details from stocks_dict"""
+        if not self.qualifying_stocks:
+            print("No qualifying stocks found")
+            return
+
+        print(f"\n=== QUALIFYING STOCKS ({len(self.qualifying_stocks)}) ===")
+        for i, stock_data in enumerate(self.qualifying_stocks, 1):
+            symbol = stock_data['symbol']
+            # Try to get more info from stocks_dict if available
+            stock_info = next((item for item in self.stocks_dict if item.get('symbol') == symbol), {})
+            print(f"{i}. {symbol}")
+            print(f"   Alpha Score: {stock_data.get('alpha_score', 0):.1f}")
+            print(f"   Entry Price: ${stock_data.get('entry_price', 0):.2f}")
+            print(f"   Stop Loss: ${stock_data.get('stop_loss', 0):.2f}")
+            print(f"   Shares: {stock_data.get('shares', 0)}")
+            print(f"   Limit Price: ${stock_data.get('limit_price', 0):.2f}")
+            if stock_info:
+                for k, v in stock_info.items():
+                    if k not in stock_data and k != 'symbol':
+                        print(f"   {k}: {v}")
+            print()
             
 if __name__ == "__main__":
     manager = StrategyManager()
-    manager.test()
+    manager.run()
     print("STOPPING MANAGER")
     

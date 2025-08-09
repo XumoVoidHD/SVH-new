@@ -25,7 +25,7 @@ class SchwabBroker:
         self.api_key = "18TX6PVgTzC3k3iaWgmiGwff2Gb9CiEv"
         self.secret_key = "pUGJDAm3oSqjx5Aq"
         
-        # Initialize the Schwab client
+        # Initialize the Schwab client with connection pool management
         self.client = Client(
             app_key=self.api_key,
             app_secret=self.secret_key,
@@ -35,6 +35,33 @@ class SchwabBroker:
             capture_callback=False,
             use_session=True
         )
+        
+        # Add connection pool management
+        import threading
+        self._connection_semaphore = threading.Semaphore(8)  # Limit to 8 concurrent connections
+        self._max_connections = 8  # Keep below the 10 limit
+    
+    def _make_api_call(self, api_method, *args, **kwargs):
+        """
+        Make an API call with connection pool management.
+        
+        Args:
+            api_method: The API method to call
+            *args: Arguments for the API method
+            **kwargs: Keyword arguments for the API method
+            
+        Returns:
+            The API response or None if failed
+        """
+        try:
+            with self._connection_semaphore:
+                import time
+                # Add a small delay to prevent overwhelming the API
+                time.sleep(0.1)
+                return api_method(*args, **kwargs)
+        except Exception as e:
+            print(f"API call failed: {e}")
+            return None
     
     def account_details(self):
         """
@@ -44,11 +71,11 @@ class SchwabBroker:
             dict: Account details response
         """
         try:
-            response = self.client.account_details_all()
-            if response.status_code == 200:
+            response = self._make_api_call(self.client.account_details_all)
+            if response and response.status_code == 200:
                 return response.json()
             else:
-                print(f"Failed to get account details: {response.status_code} - {response.text}")
+                print(f"Failed to get account details: {response.status_code if response else 'No response'} - {response.text if response else 'No response'}")
                 return None
         except Exception as e:
             print(f"Error getting account details: {e}")
@@ -66,11 +93,11 @@ class SchwabBroker:
             dict: Quote data for the symbol
         """
         try:
-            response = self.client.quote(symbol, fields=fields)
-            if response.status_code == 200:
+            response = self._make_api_call(self.client.quote, symbol, fields=fields)
+            if response and response.status_code == 200:
                 return response.json()
             else:
-                print(f"Failed to get quote for {symbol}: {response.status_code} - {response.text}")
+                print(f"Failed to get quote for {symbol}: {response.status_code if response else 'No response'} - {response.text if response else 'No response'}")
                 return None
         except Exception as e:
             print(f"Error getting quote for {symbol}: {e}")
@@ -88,11 +115,11 @@ class SchwabBroker:
             dict: Symbol-wise quote data
         """
         try:
-            response = self.client.quotes(symbols, fields=fields)
-            if response.status_code == 200:
+            response = self._make_api_call(self.client.quotes, symbols, fields=fields)
+            if response and response.status_code == 200:
                 return response.json()
             else:
-                print(f"Failed to get bulk quotes: {response.status_code} - {response.text}")
+                print(f"Failed to get bulk quotes: {response.status_code if response else 'No response'} - {response.text if response else 'No response'}")
                 return {}
         except Exception as e:
             print(f"Error getting bulk quotes: {e}")
@@ -128,7 +155,8 @@ class SchwabBroker:
             dict: Historical price data
         """
         try:
-            response = self.client.price_history(
+            response = self._make_api_call(
+                self.client.price_history,
                 symbol=symbol,
                 periodType=period_type,
                 period=period,
@@ -140,10 +168,10 @@ class SchwabBroker:
                 needPreviousClose=need_previous_close
             )
             
-            if response.status_code == 200:
+            if response and response.status_code == 200:
                 return response.json()
             else:
-                print(f"Failed to get price history for {symbol}: {response.status_code} - {response.text}")
+                print(f"Failed to get price history for {symbol}: {response.status_code if response else 'No response'} - {response.text if response else 'No response'}")
                 return None
         except Exception as e:
             print(f"Error getting price history for {symbol}: {e}")
@@ -171,6 +199,49 @@ class SchwabBroker:
         except Exception as e:
             print(f"Error getting current price for {symbol}: {e}")
             return None
+    
+    def get_connection_pool_status(self):
+        """
+        Get the current status of the connection pool.
+        
+        Returns:
+            dict: Connection pool status information
+        """
+        return {
+            "max_connections": self._max_connections,
+            "available_connections": self._connection_semaphore._value,
+            "used_connections": self._max_connections - self._connection_semaphore._value
+        }
+    
+    def get_bulk_quotes_with_retry(self, symbols: list[str], max_retries: int = 3, fields: str = "quote,reference"):
+        """
+        Fetch quotes in bulk with retry logic and connection pool management.
+        
+        Args:
+            symbols (list): List of stock symbols
+            max_retries (int): Maximum number of retry attempts
+            fields (str): Optional fields to include
+            
+        Returns:
+            dict: Symbol-wise quote data
+        """
+        for attempt in range(max_retries):
+            try:
+                result = self.get_bulk_quotes(symbols, fields=fields)
+                if result:
+                    return result
+                else:
+                    print(f"Bulk quotes attempt {attempt + 1} failed, retrying...")
+                    import time
+                    time.sleep(1)  # Wait before retry
+            except Exception as e:
+                print(f"Bulk quotes attempt {attempt + 1} failed with error: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2)  # Wait longer before retry
+        
+        print(f"All {max_retries} attempts to get bulk quotes failed")
+        return {}
     
 
 

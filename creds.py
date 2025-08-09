@@ -1,5 +1,5 @@
 # Market cap filter
-MARKET_CAP = 900_000_000_000
+MARKET_CAP = 2_000_000_000
 EQUITY = 100000
 
 # =============================================================================
@@ -92,7 +92,7 @@ ADDITIONAL_CHECKS_CONFIG = {
 
 # Risk management configuration
 RISK_CONFIG = {
-    'alpha_score_threshold': 75,
+    'alpha_score_threshold': 1,
     'risk_per_trade': 0.004,  # 0.4% of equity
     'max_position_size': 0.10,  # 10% of equity
     'micro_lot_size': 0.04,  # 4% chunks
@@ -135,23 +135,25 @@ PROFIT_CONFIG = {
         'gain_threshold': 0.05,  # Only apply trailing exit logic after 5% gain
         'drop_threshold': 0.005,  # Exit if price drops 0.5%
         'monitor_period': 3,  # Monitor for 3 minutes
-        'check_interval': 1  # Check every 1 minute during monitoring period
     }
 }
 
 # Order configuration
 ORDER_CONFIG = {
-    'limit_offset_min': 0.0003,  # 0.03%
-    'limit_offset_max': 0.0007,  # 0.07%
-    'order_window': 10,  # seconds
-    'exit_time': '16:00'  # Market-On-Close at 4:00 PM ET
+    'limit_offset_min': 0.00003,  # 0.003%
+    'limit_offset_max': 0.00007,  # 0.007%
+    'order_window': 60,  # seconds
 }
 
 # Trading hours
 TRADING_HOURS = {
-    'start': '09:30',
-    'end': '16:00',
-    'timezone': 'America/New_York'
+    'market_open': '09:30',
+    'market_close': '16:00',
+    'timezone': 'America/New_York',
+    'morning_entry_start': '10:00',
+    'morning_entry_end': '11:15',
+    'afternoon_entry_start': '13:30',
+    'afternoon_entry_end': '14:30'
 }
 
 # Data storage configuration
