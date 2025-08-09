@@ -11,6 +11,7 @@ import pytz
 from helpers import vwap, ema, macd, adx, atr
 from log import setup_logger
 from db.trades_db import trades_db
+from fetch_marketcap_csv import fetch_marketcap_csv
 setup_logger()
 
 
@@ -1684,6 +1685,7 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
+    fetch_marketcap_csv()
     manager = StrategyManager()
     manager.run()
     print("STOPPING MANAGER")
