@@ -34,6 +34,8 @@ class Strategy:
         self.order_config = creds.ORDER_CONFIG
         self.trading_hours = creds.TRADING_HOURS
         self.data_config = creds.DATA_CONFIG
+        self.hedge_config = creds.HEDGE_CONFIG
+        self.leverage_config = creds.LEVERAGE_CONFIG
         
         self.data = {}
         self.indicators = {}
@@ -49,6 +51,13 @@ class Strategy:
         self.close_time = None
         self.trailing_exit_monitoring = False
         
+        # Hedge and leverage tracking
+        self.hedge_active = False
+        self.hedge_shares = 0
+        self.hedge_symbol = self.hedge_config['hedge_symbol']
+        self.current_leverage = 1.0
+        self.margin_used_leverage = 0
+
         # Load existing data from database if available
         self.load_from_database()
     
@@ -96,6 +105,209 @@ class Strategy:
             return f"No more entry windows today. Market closes at {market_close}"
         else:
             return f"Market closed. Next entry window: {morning_start}-{morning_end} tomorrow"
+    
+    def check_hedge_triggers(self):
+        """Check if hedge triggers are met and return hedge level"""
+        if not self.hedge_config['enabled']:
+            return None, 0
+        
+        triggers_met = 0
+        trigger_details = []
+        
+        try:
+            # Check VIX trigger
+            vix_data = self.broker.get_historical_data(3, "VIX")
+            if not vix_data.empty:
+                current_vix = vix_data['close'].iloc[-1]
+                if current_vix > self.hedge_config['triggers']['vix_threshold']:
+                    triggers_met += 1
+                    trigger_details.append(f"VIX {current_vix:.1f} > {self.hedge_config['triggers']['vix_threshold']}")
+            
+            # Check S&P 500 drop trigger (using SPY as proxy)
+            spy_data = self.broker.get_historical_data(15, "SPY")  # 15-min data
+            if not spy_data.empty and len(spy_data) >= 2:
+                current_price = spy_data['close'].iloc[-1]
+                price_15min_ago = spy_data['close'].iloc[-2]
+                drop_pct = (price_15min_ago - current_price) / price_15min_ago
+                
+                if drop_pct > self.hedge_config['triggers']['sp500_drop_threshold']:
+                    triggers_met += 1
+                    trigger_details.append(f"S&P drop {drop_pct*100:.1f}% > {self.hedge_config['triggers']['sp500_drop_threshold']*100:.1f}%")
+            
+
+            
+        except Exception as e:
+            print(f"Error checking hedge triggers: {e}")
+            return None, 0
+        
+        # Determine hedge level
+        if triggers_met == 0:
+            return None, 0
+        elif triggers_met == 1:
+            hedge_level = 'mild'
+            beta = self.hedge_config['hedge_levels']['mild']['beta']
+        else:
+            hedge_level = 'severe' 
+            beta = self.hedge_config['hedge_levels']['severe']['beta']
+        
+        print(f"Hedge triggers: {triggers_met} met - {', '.join(trigger_details)}")
+        print(f"Hedge level: {hedge_level} (-{beta}β)")
+        
+        return hedge_level, beta
+    
+    def check_leverage_conditions(self):
+        """Check if leverage conditions are met and return leverage multiplier"""
+        if not self.leverage_config['enabled']:
+            return 1.0
+        
+        conditions_met = 0
+        total_conditions = 3  # Alpha Score, VIX, Drawdown (VIX trend is bonus)
+        condition_details = []
+        
+        try:
+            # Check Alpha Score condition
+            if self.score >= self.leverage_config['conditions']['alpha_score_min']:
+                conditions_met += 1
+                condition_details.append(f"Alpha Score {self.score} ≥ {self.leverage_config['conditions']['alpha_score_min']}")
+            
+            # Check VIX condition
+            vix_data = self.broker.get_historical_data(3, "VIX")
+            if not vix_data.empty:
+                current_vix = vix_data['close'].iloc[-1]
+                if current_vix < self.leverage_config['conditions']['vix_max']:
+                    conditions_met += 1
+                    condition_details.append(f"VIX {current_vix:.1f} < {self.leverage_config['conditions']['vix_max']}")
+                
+                # Check VIX trend (10-day declining)
+                if len(vix_data) >= self.leverage_config['conditions']['vix_trend_days']:
+                    vix_10d_ago = vix_data['close'].iloc[-self.leverage_config['conditions']['vix_trend_days']]
+                    if current_vix < vix_10d_ago:
+                        condition_details.append(f"VIX trending down over {self.leverage_config['conditions']['vix_trend_days']} days")
+             
+        except Exception as e:
+            print(f"Error checking leverage conditions: {e}")
+            return 1.0
+        
+        # Determine leverage level
+        conditions_pct = conditions_met / total_conditions
+        
+        if conditions_pct >= 1.0:  # All conditions met
+            leverage = self.leverage_config['leverage_levels']['all_conditions_met']
+            print(f"Leverage: All conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
+        elif conditions_pct >= 0.6:  # Most conditions met
+            leverage = self.leverage_config['leverage_levels']['partial_conditions'] 
+            print(f"Leverage: Partial conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
+        else:
+            leverage = self.leverage_config['leverage_levels']['default']
+            print(f"Leverage: Few conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
+        
+        if condition_details:
+            print(f"Leverage conditions: {', '.join(condition_details)}")
+        
+        return leverage
+    
+    def execute_hedge(self, hedge_level, beta):
+        """Execute hedge by shorting XLF ETF"""
+        if hedge_level is None or self.hedge_active:
+            return
+        
+        try:
+            # Calculate hedge size
+            account_equity = creds.EQUITY
+            hedge_amount = account_equity * beta
+            
+            # Get XLF price
+            xlf_price = self.broker.get_current_price(self.hedge_symbol)
+            if xlf_price is None:
+                print(f"Unable to get {self.hedge_symbol} price for hedge")
+                return
+            
+            # Calculate shares to short
+            hedge_shares = int(hedge_amount / xlf_price)
+            
+            print(f"Executing {hedge_level} hedge:")
+            print(f"  - Hedge amount: ${hedge_amount:,.0f} ({beta*100:.1f}% of equity)")
+            print(f"  - {self.hedge_symbol} price: ${xlf_price:.2f}")
+            print(f"  - Shares to short: {hedge_shares}")
+            
+            # Place short order
+            order_id, executed_price = self.broker.place_order(
+                symbol=self.hedge_symbol,
+                qty=hedge_shares,
+                order_type='MARKET',
+                side='SELL'  # Short position
+            )
+            
+            if order_id:
+                self.hedge_active = True
+                self.hedge_shares = hedge_shares
+                print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
+            else:
+                print(f"Failed to execute hedge on {self.hedge_symbol}")
+                
+        except Exception as e:
+            print(f"Error executing hedge: {e}")
+    
+    def close_hedge(self):
+        """Close hedge position by buying back XLF shares"""
+        if not self.hedge_active or self.hedge_shares == 0:
+            return
+        
+        try:
+            print(f"Closing hedge: Buying back {self.hedge_shares} shares of {self.hedge_symbol}")
+            
+            order_id, executed_price = self.broker.place_order(
+                symbol=self.hedge_symbol,
+                qty=self.hedge_shares,
+                order_type='MARKET',
+                side='BUY'  # Buy to close short
+            )
+            
+            if order_id:
+                self.hedge_active = False
+                self.hedge_shares = 0
+                print(f"Hedge closed successfully")
+            else:
+                print(f"Failed to close hedge position")
+                
+        except Exception as e:
+            print(f"Error closing hedge: {e}")
+    
+    def end_of_day_weak_exit(self):
+        """Exit weak positions at 3:30 PM (-0.3% to +1.2%)"""
+        if not self.position_active:
+            return
+        
+        current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
+        
+        # Exit if position is weak (-0.3% to +1.2%)
+        if -0.003 <= current_gain_pct <= 0.012:
+            print(f"3:30 PM Weak Exit: {current_gain_pct*100:.1f}% gain in weak range")
+            self.close_position('end_of_day_weak', self.position_shares)
+        else:
+            print(f"3:30 PM: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
+    
+    def safety_exit_all(self):
+        """Safety exit all positions at 3:35 PM"""
+        if self.position_active:
+            print("3:35 PM Safety Exit: Closing all positions")
+            self.close_position('safety_exit', self.position_shares)
+        
+        # Close hedge if active
+        if self.hedge_active:
+            print("3:35 PM Safety Exit: Closing hedge positions")
+            self.close_hedge()
+    
+    def market_on_close_exit(self):
+        """Market-on-close exit at 4:00 PM"""
+        if self.position_active:
+            print("4:00 PM Market-On-Close: Closing remaining positions")
+            self.close_position('market_on_close', self.position_shares)
+        
+        # Close hedge if active
+        if self.hedge_active:
+            print("4:00 PM Market-On-Close: Closing hedge positions")
+            self.close_hedge()
     
     def load_from_database(self):
         """Load existing strategy data from database and ensure boolean values are properly set"""
@@ -358,38 +570,57 @@ class Strategy:
         return slope_ok 
         
     def calculate_position_size(self):
-        """Calculate position size based on risk management rules"""
+        """Calculate position size based on risk management rules with hedge and leverage"""
+        
+        # Step 1: Check hedge triggers and execute if needed
+        hedge_level, hedge_beta = self.check_hedge_triggers()
+        if hedge_level:
+            self.execute_hedge(hedge_level, hedge_beta)
+        
+        # Step 2: Check leverage conditions
+        leverage_multiplier = self.check_leverage_conditions()
+        self.current_leverage = leverage_multiplier
         
         # Get account equity from config
         account_equity = creds.EQUITY
-        
-        # Risk per trade: 0.4% of equity
-        risk_per_trade = creds.RISK_CONFIG['risk_per_trade']
-        
-        # Get current price and calculate stop loss
         current_price = self.broker.get_current_price(self.stock)
+
+        available_pct = self.max_position_pct - self.total_position_size
+        if available_pct <= 0:
+            return 0, 0, 0, 0
+        
+        risk_per_trade = creds.RISK_CONFIG['risk_per_trade']
+        desired_pct = min(risk_per_trade, available_pct)
+        
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
-        
-        # Calculate shares based on risk
         risk_per_share = current_price - stop_loss_price
         if risk_per_share <= 0:
             return 0, 0, 0, 0
         
-        shares = int(risk_per_trade / risk_per_share)
+        capital_for_trade = account_equity * desired_pct
+        shares_by_allocation = int(capital_for_trade / current_price)
         
-        # Apply position size limits (up to 10% equity)
-        max_shares_by_equity = int((account_equity * creds.RISK_CONFIG['max_position_size']) / current_price)
-        shares = max(shares, max_shares_by_equity)
+        risk_per_trade = creds.RISK_CONFIG['risk_per_trade']  # in currency terms
+        shares_by_risk = int(risk_per_trade / risk_per_share)
+
+        shares = min(shares_by_allocation, shares_by_risk)
         
-        # # Apply micro-lot sizing (4-5% chunks)
-        # micro_lot_size = int(shares * 0.04)  # 4% chunk
-        # if micro_lot_size < 1:
-        #     micro_lot_size = 1
+        # Apply leverage to all trades when conditions are met
+        if leverage_multiplier > 1.0:
+            shares = int(shares * leverage_multiplier)
+            print(f"Applying {leverage_multiplier}x leverage: {shares} shares")
+            # Calculate margin used for leverage
+            base_cost = shares * current_price / leverage_multiplier
+            leveraged_cost = shares * current_price
+            self.margin_used_leverage = leveraged_cost - base_cost
+            print(f"Margin used for leverage: ${self.margin_used_leverage:,.0f}")
+        else:
+            print("No leverage applied to this trade")
+            self.margin_used_leverage = 0
         
-        # shares = micro_lot_size
+        temp_position_size += (shares * current_price) / account_equity
         
-        # Calculate limit order price: VWAP+/- (0.03%-0.07% random)
         # Ensure VWAP is below current price before using it
         data_3min = self.broker.get_historical_data(3, self.stock)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
@@ -414,7 +645,7 @@ class Strategy:
             stop_loss_price=stop_loss_price
         )
         
-        return shares, current_price, stop_loss_price, limit_price
+        return shares, current_price, stop_loss_price, limit_price, temp_position_size
     
     def calculate_stop_loss(self, current_price):
         """Calculate stop loss percentage based on volatility"""
@@ -440,7 +671,7 @@ class Strategy:
         # Both conditions must be met to place an order
         if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and bool(self.additional_checks_passed):
             print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG['alpha_score_threshold']} AND additional checks passed")
-            shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
+            shares, entry_price, stop_loss, limit_price, temp_position_size = self.calculate_position_size()
             if shares > 0:
                 print(f"Order Details:")
                 print(f"  - Symbol: {self.stock}")
@@ -510,6 +741,7 @@ class Strategy:
                             pnl=self.pnl,
                             used_margin=self.used_margin
                         )
+                        self.total_position_size += temp_position_size
                         
                         return shares, entry_price, stop_loss, limit_price
                     else:
@@ -529,6 +761,24 @@ class Strategy:
                     
     def run(self, i):
         while True:
+            # Check for end-of-day exit times
+            eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+            current_time = datetime.now(eastern_tz)
+            current_time_str = current_time.strftime("%H:%M")
+            
+            # 3:30 PM - Systematic close of weak positions
+            if current_time_str == "15:30":
+                self.end_of_day_weak_exit()
+            
+            # 3:35 PM - Safety exit all positions
+            elif current_time_str == "15:35":
+                self.safety_exit_all()
+            
+            # 4:00 PM - Market-on-close for any remaining positions
+            elif current_time_str >= self.trading_hours['market_close']:
+                self.market_on_close_exit()
+                break  # End trading for the day
+            
             # Check if we're in entry time windows
             if self.is_entry_time_window():
                 print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
@@ -546,7 +796,7 @@ class Strategy:
             
             # Sleep for a bit before next iteration if no active position
             if not self.position_active:
-                time.sleep(30)  # Wait 30 seconds before checking again
+                time.sleep(60*3)  # Wait 3 minutes before checking again
         
         # self.calculate_indicators()
         # self.process_score()

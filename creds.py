@@ -138,6 +138,44 @@ PROFIT_CONFIG = {
     }
 }
 
+# Hedge configuration (Point 9)
+HEDGE_CONFIG = {
+    'enabled': True,
+    'hedge_symbol': 'XLF',  # Financial sector ETF to short
+    'triggers': {
+        'vix_threshold': 22,  # VIX > 22 triggers hedge
+        'sp500_drop_threshold': 0.012,  # S&P drops >1.2% in 15min
+    },
+    'hedge_levels': {
+        'mild': {  # 1 trigger met
+            'beta': 0.15,  # -0.15β hedge
+            'description': 'Mild hedge: VIX elevated but market stable'
+        },
+        'severe': {  # All triggers met
+            'beta': 0.30,  # -0.3β hedge
+            'description': 'Severe hedge: Multiple risk indicators triggered'
+        }
+    }
+}
+
+# Leverage configuration (Point 9) 
+LEVERAGE_CONFIG = {
+    'enabled': True,
+    'max_leverage': 2.0,  # Maximum 2x leverage
+    'conditions': {
+        'alpha_score_min': 85,  # Alpha Score ≥85%
+        'vix_max': 18,  # VIX <18
+        'drawdown_max': 0.005,  # 10-day drawdown <0.5%
+        'vix_trend_days': 10  # 10-day VIX trending down
+    },
+    'leverage_levels': {
+        'all_conditions_met': 2.0,  # 2x leverage if all conditions pass
+        'partial_conditions': 1.2,  # 1.2x if some conditions fail
+        'default': 1.0  # 1x (no leverage) as fallback
+    },
+    'margin_alert_threshold': 1.5  # Alert if margin >150%
+}
+
 # Order configuration
 ORDER_CONFIG = {
     'limit_offset_min': 0.00003,  # 0.003%
