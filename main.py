@@ -59,6 +59,9 @@ class Strategy:
         self.current_leverage = 1.0
         self.margin_used_leverage = 0
 
+        # Each stock can use risk_per_trade percentage of equity (default 0.4%)
+        # No need to track total position size across stocks
+
         # Load existing data from database if available
         self.load_from_database()
     
@@ -117,16 +120,18 @@ class Strategy:
         
         try:
             # Check VIX trigger
-            vix_data = self.broker.get_historical_data(3, "VIX")
-            if not vix_data.empty:
+            vix_data = self.broker.get_historical_data(3, "VIXY")
+            if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 if current_vix > self.hedge_config['triggers']['vix_threshold']:
                     triggers_met += 1
                     trigger_details.append(f"VIX {current_vix:.1f} > {self.hedge_config['triggers']['vix_threshold']}")
+            else:
+                print(f"VIX data unavailable or empty for hedge trigger check")
             
             # Check S&P 500 drop trigger (using SPY as proxy)
             spy_data = self.broker.get_historical_data(15, "SPY")  # 15-min data
-            if not spy_data.empty and len(spy_data) >= 2:
+            if not spy_data.empty and len(spy_data) >= 2 and 'close' in spy_data.columns:
                 current_price = spy_data['close'].iloc[-1]
                 price_15min_ago = spy_data['close'].iloc[-2]
                 drop_pct = (price_15min_ago - current_price) / price_15min_ago
@@ -134,11 +139,13 @@ class Strategy:
                 if drop_pct > self.hedge_config['triggers']['sp500_drop_threshold']:
                     triggers_met += 1
                     trigger_details.append(f"S&P drop {drop_pct*100:.1f}% > {self.hedge_config['triggers']['sp500_drop_threshold']*100:.1f}%")
-            
-
+            else:
+                print(f"SPY data unavailable or insufficient for hedge trigger check")
             
         except Exception as e:
             print(f"Error checking hedge triggers: {e}")
+            import traceback
+            traceback.print_exc()
             return None, 0
         
         # Determine hedge level
@@ -172,8 +179,8 @@ class Strategy:
                 condition_details.append(f"Alpha Score {self.score} ≥ {self.leverage_config['conditions']['alpha_score_min']}")
             
             # Check VIX condition
-            vix_data = self.broker.get_historical_data(3, "VIX")
-            if not vix_data.empty:
+            vix_data = self.broker.get_historical_data(3, "VIXY")
+            if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 if current_vix < self.leverage_config['conditions']['vix_max']:
                     conditions_met += 1
@@ -184,9 +191,13 @@ class Strategy:
                     vix_10d_ago = vix_data['close'].iloc[-self.leverage_config['conditions']['vix_trend_days']]
                     if current_vix < vix_10d_ago:
                         condition_details.append(f"VIX trending down over {self.leverage_config['conditions']['vix_trend_days']} days")
+            else:
+                print(f"VIX data unavailable or empty for leverage condition check")
              
         except Exception as e:
             print(f"Error checking leverage conditions: {e}")
+            import traceback
+            traceback.print_exc()
             return 1.0
         
         # Determine leverage level
@@ -231,23 +242,28 @@ class Strategy:
             print(f"  - {self.hedge_symbol} price: ${xlf_price:.2f}")
             print(f"  - Shares to short: {hedge_shares}")
             
-            # Place short order
-            order_id, executed_price = self.broker.place_order(
-                symbol=self.hedge_symbol,
-                qty=hedge_shares,
-                order_type='MARKET',
-                side='SELL'  # Short position
+            # Update hedge status and track hedge position
+            self.hedge_active = True
+            self.hedge_shares = hedge_shares
+            
+            # Update database with hedge information
+            trades_db.update_strategy_data(self.stock,
+                hedge_active=True,
+                hedge_shares=hedge_shares,
+                hedge_symbol=self.hedge_symbol,
+                hedge_level=hedge_level,
+                hedge_beta=beta,
+                hedge_entry_price=xlf_price,
+                hedge_entry_time=datetime.now(pytz.timezone('America/New_York'))
             )
             
-            if order_id:
-                self.hedge_active = True
-                self.hedge_shares = hedge_shares
-                print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
-            else:
-                print(f"Failed to execute hedge on {self.hedge_symbol}")
+            print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
+            print(f"Hedge position tracked in database for {self.stock}")
                 
         except Exception as e:
             print(f"Error executing hedge: {e}")
+            import traceback
+            traceback.print_exc()
     
     def close_hedge(self):
         """Close hedge position by buying back XLF shares"""
@@ -257,22 +273,38 @@ class Strategy:
         try:
             print(f"Closing hedge: Buying back {self.hedge_shares} shares of {self.hedge_symbol}")
             
-            order_id, executed_price = self.broker.place_order(
-                symbol=self.hedge_symbol,
-                qty=self.hedge_shares,
-                order_type='MARKET',
-                side='BUY'  # Buy to close short
+            # Get current XLF price for P&L calculation
+            current_xlf_price = self.broker.get_current_price(self.hedge_symbol)
+            if current_xlf_price is None:
+                print(f"Unable to get current {self.hedge_symbol} price for P&L calculation")
+                current_xlf_price = 0
+            
+            # Calculate hedge P&L (profit from short position)
+            hedge_pnl = 0
+            if hasattr(self, 'hedge_entry_price') and self.hedge_entry_price:
+                hedge_pnl = (self.hedge_entry_price - current_xlf_price) * self.hedge_shares
+            
+            # Update hedge status
+            self.hedge_active = False
+            self.hedge_shares = 0
+            
+            # Update database with hedge closure
+            trades_db.update_strategy_data(self.stock,
+                hedge_active=False,
+                hedge_shares=0,
+                hedge_exit_price=current_xlf_price,
+                hedge_exit_time=datetime.now(pytz.timezone('America/New_York')),
+                hedge_pnl=hedge_pnl
             )
             
-            if order_id:
-                self.hedge_active = False
-                self.hedge_shares = 0
-                print(f"Hedge closed successfully")
-            else:
-                print(f"Failed to close hedge position")
+            print(f"Hedge closed successfully")
+            print(f"Hedge P&L: ${hedge_pnl:.2f}")
+            print(f"Hedge position updated in database for {self.stock}")
                 
         except Exception as e:
             print(f"Error closing hedge: {e}")
+            import traceback
+            traceback.print_exc()
     
     def end_of_day_weak_exit(self):
         """Exit weak positions at 3:30 PM (-0.3% to +1.2%)"""
@@ -509,7 +541,7 @@ class Strategy:
     def _check_market_calm_conditions(self):
         """Check market calm conditions (VIX)"""
         try:
-            vix_df = self.broker.get_historical_data(3, "VIX")
+            vix_df = self.broker.get_historical_data(3, "VIXY")
             if vix_df.empty:
                 return False
             
@@ -573,25 +605,24 @@ class Strategy:
     def calculate_position_size(self):
         """Calculate position size based on risk management rules with hedge and leverage"""
         
-        # Step 1: Check hedge triggers and execute if needed
-        hedge_level, hedge_beta = self.check_hedge_triggers()
-        if hedge_level:
-            self.execute_hedge(hedge_level, hedge_beta)
+        # # Step 1: Check hedge triggers and execute if needed
+        # hedge_level, hedge_beta = self.check_hedge_triggers()
+        # if hedge_level:
+        #     self.execute_hedge(hedge_level, hedge_beta)
         
-        # Step 2: Check leverage conditions
-        leverage_multiplier = self.check_leverage_conditions()
+        # # Step 2: Check leverage conditions
+        # leverage_multiplier = self.check_leverage_conditions()
+        # self.current_leverage = leverage_multiplier
+
+        leverage_multiplier = 1.0
         self.current_leverage = leverage_multiplier
         
         # Get account equity from config
         account_equity = creds.EQUITY
         current_price = self.broker.get_current_price(self.stock)
-
-        available_pct = self.max_position_pct - self.total_position_size
-        if available_pct <= 0:
-            return 0, 0, 0, 0
         
+        # Each stock gets exactly risk_per_trade percentage of equity
         risk_per_trade = creds.RISK_CONFIG['risk_per_trade']
-        desired_pct = min(risk_per_trade, available_pct)
         
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
@@ -599,13 +630,11 @@ class Strategy:
         if risk_per_share <= 0:
             return 0, 0, 0, 0
         
-        capital_for_trade = account_equity * desired_pct
-        shares_by_allocation = int(capital_for_trade / current_price)
+        # Calculate capital for trade based on risk_per_trade percentage
+        capital_for_trade = account_equity * risk_per_trade
         
-        risk_per_trade = creds.RISK_CONFIG['risk_per_trade']  # in currency terms
-        shares_by_risk = int(risk_per_trade / risk_per_share)
-
-        shares = min(shares_by_allocation, shares_by_risk)
+        # Calculate shares based on available capital
+        shares = int(capital_for_trade / current_price)
         
         # Apply leverage to all trades when conditions are met
         if leverage_multiplier > 1.0:
@@ -620,8 +649,6 @@ class Strategy:
             print("No leverage applied to this trade")
             self.margin_used_leverage = 0
         
-        temp_position_size += (shares * current_price) / account_equity
-        
         # Ensure VWAP is below current price before using it
         data_3min = self.broker.get_historical_data(3, self.stock)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
@@ -629,7 +656,8 @@ class Strategy:
         # Check if VWAP is below current price (required condition)
         if vwap_value >= current_price:
             print(f"WARNING: VWAP (${vwap_value:.2f}) is NOT below current price (${current_price:.2f}) - skipping order")
-            return 0, 0, 0, 0  # Don't place order if VWAP condition not met
+            vwap_value = current_price
+            
         
         offset_pct = random.uniform(creds.ORDER_CONFIG['limit_offset_min'], creds.ORDER_CONFIG['limit_offset_max'])  # 0.03% to 0.07%
         limit_price = vwap_value * (1 + offset_pct)  # Slightly above VWAP for buy orders
@@ -646,7 +674,7 @@ class Strategy:
             stop_loss_price=stop_loss_price
         )
         
-        return shares, current_price, stop_loss_price, limit_price, temp_position_size
+        return shares, current_price, stop_loss_price, limit_price
     
     def calculate_stop_loss(self, current_price):
         """Calculate stop loss percentage based on volatility"""
@@ -670,9 +698,9 @@ class Strategy:
         print(f"Additional Checks Passed: {self.additional_checks_passed}")
         
         # Both conditions must be met to place an order
-        if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and bool(self.additional_checks_passed):
+        if self.score >= creds.RISK_CONFIG['alpha_score_threshold']: # and bool(self.additional_checks_passed):
             print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG['alpha_score_threshold']} AND additional checks passed")
-            shares, entry_price, stop_loss, limit_price, temp_position_size = self.calculate_position_size()
+            shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
             if shares > 0:
                 print(f"Order Details:")
                 print(f"  - Symbol: {self.stock}")
@@ -742,7 +770,7 @@ class Strategy:
                             pnl=self.pnl,
                             used_margin=self.used_margin
                         )
-                        self.total_position_size += temp_position_size
+                
                         
                         return shares, entry_price, stop_loss, limit_price
                     else:
@@ -762,45 +790,49 @@ class Strategy:
                     
     def run(self, i):
         while True:
-            # Check for end-of-day exit times
-            eastern_tz = pytz.timezone(self.trading_hours['timezone'])
-            current_time = datetime.now(eastern_tz)
-            current_time_str = current_time.strftime("%H:%M")
+            # # Check for end-of-day exit times
+            # eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+            # current_time = datetime.now(eastern_tz)
+            # current_time_str = current_time.strftime("%H:%M")
             
-            # 3:30 PM - Systematic close of weak positions
-            if current_time_str == "15:30":
-                self.end_of_day_weak_exit()
+            # # 3:30 PM - Systematic close of weak positions
+            # if current_time_str == "15:30":
+            #     self.end_of_day_weak_exit()
             
-            # 3:35 PM - Safety exit all positions
-            elif current_time_str == "15:35":
-                self.safety_exit_all()
+            # # 3:35 PM - Safety exit all positions
+            # elif current_time_str == "15:35":
+            #     self.safety_exit_all()
             
-            # 4:00 PM - Market-on-close for any remaining positions
-            elif current_time_str >= self.trading_hours['market_close']:
-                self.market_on_close_exit()
-                break  # End trading for the day
+            # # 4:00 PM - Market-on-close for any remaining positions
+            # elif current_time_str >= self.trading_hours['market_close']:
+            #     self.market_on_close_exit()
+            #     break  # End trading for the day
             
-            # Check if we're in entry time windows
-            if self.is_entry_time_window():
-                print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
-                self.calculate_indicators()
-                self.process_score()
-            else:
-                # Outside entry windows - only monitor existing positions
-                window_status = self.get_next_entry_window()
-                print(f"[{self.stock}] {window_status} - only monitoring existing positions")
+            # # Check if we're in entry time windows
+            # if self.is_entry_time_window():
+            #     print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
+            #     self.calculate_indicators()
+            #     self.process_score()
+            # else:
+            #     # Outside entry windows - only monitor existing positions
+            #     window_status = self.get_next_entry_window()
+            #     print(f"[{self.stock}] {window_status} - only monitoring existing positions")
                 
-            # Always monitor active positions regardless of time
+            # # Always monitor active positions regardless of time
+            # if self.position_active and self.position_shares > 0:
+            #     print(f"Starting position monitoring for {self.stock}...")
+            #     self.start_individual_monitoring()
+            
+            # # Sleep for a bit before next iteration if no active position
+            # if not self.position_active:
+            #     time.sleep(60*3)  # Wait 3 minutes before checking again
+        
+            self.calculate_indicators()
+            self.process_score()
+
             if self.position_active and self.position_shares > 0:
                 print(f"Starting position monitoring for {self.stock}...")
                 self.start_individual_monitoring()
-            
-            # Sleep for a bit before next iteration if no active position
-            if not self.position_active:
-                time.sleep(60*3)  # Wait 3 minutes before checking again
-        
-        # self.calculate_indicators()
-        # self.process_score()
     
     def monitor_position(self):
         """Monitor position for stop loss and take profit conditions"""
@@ -1203,59 +1235,83 @@ class StrategyBroker:
         self.initial_balance = creds.EQUITY
     
     def get_historical_data(self, num, stock):
-        if num in [1, 5, 10, 15, 30]:            
-            data = self.broker.get_price_history(
-                symbol=stock,
-                period_type="day",
-                period=1,
-                frequency_type="minute",
-                frequency=num,
-                need_extended_hours_data=False
-            )
-            
-            if data and "candles" in data:
-                df = pd.DataFrame(data["candles"])
-                df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
-
-                # Convert UTC datetime to US Eastern Time
-                df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
-                df.set_index("datetime", inplace=True)
-
-                return df
+        try:
+            if num in [1, 5, 10, 15, 30]:            
+                data = self.broker.get_price_history(
+                    symbol=stock,
+                    period_type="day",
+                    period=1,
+                    frequency_type="minute",
+                    frequency=num,
+                    need_extended_hours_data=False
+                )
+                
+                print(f"DEBUG: Raw data for {stock}: {type(data)}")
+                if data:
+                    print(f"DEBUG: Data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
+                    if isinstance(data, dict) and "candles" in data:
+                        print(f"DEBUG: Candles data type: {type(data['candles'])}, length: {len(data['candles']) if data['candles'] else 0}")
+                        if data["candles"]:
+                            df = pd.DataFrame(data["candles"])
+                            print(f"DEBUG: DataFrame columns: {list(df.columns)}")
+                            print(f"DEBUG: DataFrame shape: {df.shape}")
+                            
+                            # Check if datetime column exists
+                            if "datetime" in df.columns:
+                                df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
+                                # Convert UTC datetime to US Eastern Time
+                                df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+                                df.set_index("datetime", inplace=True)
+                                return df
+                            else:
+                                print(f"ERROR: No 'datetime' column found. Available columns: {list(df.columns)}")
+                                return pd.DataFrame()
+                        else:
+                            print(f"ERROR: Empty candles data for {stock}")
+                            return pd.DataFrame()
+                    else:
+                        print(f"ERROR: No 'candles' key in data for {stock}")
+                        return pd.DataFrame()
+                else:
+                    print(f"ERROR: No data received from broker for {stock}")
+                    return pd.DataFrame()
             else:
-                print("No data received from broker")
-                return pd.DataFrame()
-        else:
-            data = self.broker.get_price_history(
-                symbol=stock,
-                period_type="day",
-                period=1,
-                frequency_type="minute",
-                frequency=1,
-                need_extended_hours_data=False
-            )
+                data = self.broker.get_price_history(
+                    symbol=stock,
+                    period_type="day",
+                    period=1,
+                    frequency_type="minute",
+                    frequency=1,
+                    need_extended_hours_data=False
+                )
 
-            if data and "candles" in data:
-                df = pd.DataFrame(data["candles"])
-                df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
+                if data and "candles" in data and data["candles"]:
+                    df = pd.DataFrame(data["candles"])
+                    if "datetime" in df.columns:
+                        df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
+                        # Convert UTC datetime to US Eastern Time
+                        df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
+                        df.set_index("datetime", inplace=True)
 
-                # Convert UTC datetime to US Eastern Time
-                df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
-                df.set_index("datetime", inplace=True)
+                        # Resample to 3-minute candles
+                        df_min = df.resample(f"{num}min").agg({
+                            'open': 'first',
+                            'high': 'max',
+                            'low': 'min',
+                            'close': 'last',
+                            'volume': 'sum'
+                        }).dropna()
 
-                # Resample to 3-minute candles
-                df_min = df.resample(f"{num}min").agg({
-                    'open': 'first',
-                    'high': 'max',
-                    'low': 'min',
-                    'close': 'last',
-                    'volume': 'sum'
-                }).dropna()
-
-                return df_min
-            else:
-                print("No data received from broker")
-                return pd.DataFrame()
+                        return df_min
+                    else:
+                        print(f"ERROR: No 'datetime' column found for resampling {stock}")
+                        return pd.DataFrame()
+                else:
+                    print(f"ERROR: No candles data received from broker for {stock}")
+                    return pd.DataFrame()
+        except Exception as e:
+            print(f"ERROR: Exception in get_historical_data for {stock}: {e}")
+            return pd.DataFrame()
     
     def get_current_price(self, symbol: str):
         return self.broker.get_current_price(symbol)
@@ -1361,11 +1417,13 @@ class StrategyManager:
 
         try:
             self.stocks_list, self.stocks_dict = self.selector.run()
+            # self.stocks_list = ["AAPL"]
+            # self.stocks_dict = []
             print(f"Stock selector returned {len(self.stocks_list)} stocks")
         except Exception as e:
             print(f"Error in stock selector: {e}")
             # Fallback to a default list
-            self.stocks_list = ["AAPL", "MSFT", "NVDA"]
+            self.stocks_list = ["AAPL"]
             self.stocks_dict = []
         # self.stocks_list = ["AAPL", "MSFT", "NVDA"]
         
@@ -1435,6 +1493,10 @@ class StrategyManager:
         # Print final qualifying stocks summary
 
     def test(self):
+        vix_df = self.broker.get_historical_data(5, "VIXY")
+        print(vix_df)
+        exit()
+
         """Test the database integration and strategy functionality"""
         print("🧪 Starting Database Integration Test...")
         

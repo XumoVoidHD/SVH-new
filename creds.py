@@ -1,6 +1,6 @@
 # Market cap filter
 MARKET_CAP = 2_000_000_000
-EQUITY = 100000
+EQUITY = 1000000
 
 # =============================================================================
 # SVH ALPHA INTRADAY TRADING STRATEGY CONFIGURATION
@@ -93,9 +93,7 @@ ADDITIONAL_CHECKS_CONFIG = {
 # Risk management configuration
 RISK_CONFIG = {
     'alpha_score_threshold': 1,
-    'risk_per_trade': 0.004,  # 0.4% of equity
-    'max_position_size': 0.10,  # 10% of equity
-    'micro_lot_size': 0.04,  # 4% chunks
+    'risk_per_trade': 0.004,  # 0.4% of equity per trade
     'max_daily_trades': 10,
     'daily_drawdown_limit': 0.02,  # 2%
     'monthly_drawdown_limit': 0.08,  # 8%
@@ -229,7 +227,7 @@ DATA_CONFIG = {
 
 # To modify risk parameters:
 # RISK_CONFIG['risk_per_trade'] = 0.005  # 0.5% risk per trade
-# RISK_CONFIG['max_position_size'] = 0.15  # 15% max position size
+
 
 # To adjust stop loss parameters:
 # STOP_LOSS_CONFIG['default_stop_loss'] = 0.02  # 2% default stop
