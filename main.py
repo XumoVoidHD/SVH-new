@@ -61,6 +61,10 @@ class Strategy:
 
         # Each stock can use risk_per_trade percentage of equity (default 0.4%)
         # No need to track total position size across stocks
+        
+        # Capital tracking
+        self.used_capital = 0
+        self.used_margin = 0
 
         # Load existing data from database if available
         self.load_from_database()
@@ -327,9 +331,9 @@ class Strategy:
             self.close_position('safety_exit', self.position_shares)
         
         # Close hedge if active
-        if self.hedge_active:
-            print("3:35 PM Safety Exit: Closing hedge positions")
-            self.close_hedge()
+        # if self.hedge_active:
+        #     print("3:35 PM Safety Exit: Closing hedge positions")
+        #     self.close_hedge()
     
     def market_on_close_exit(self):
         """Market-on-close exit at 4:00 PM"""
@@ -338,9 +342,9 @@ class Strategy:
             self.close_position('market_on_close', self.position_shares)
         
         # Close hedge if active
-        if self.hedge_active:
-            print("4:00 PM Market-On-Close: Closing hedge positions")
-            self.close_hedge()
+        # if self.hedge_active:
+        #     print("4:00 PM Market-On-Close: Closing hedge positions")
+        #     self.close_hedge()
     
     def load_from_database(self):
         """Load existing strategy data from database and ensure boolean values are properly set"""
@@ -698,7 +702,9 @@ class Strategy:
         print(f"Additional Checks Passed: {self.additional_checks_passed}")
         
         # Both conditions must be met to place an order
-        if self.score >= creds.RISK_CONFIG['alpha_score_threshold']: # and bool(self.additional_checks_passed):
+        if self.score >= creds.RISK_CONFIG['alpha_score_threshold']: 
+            # Use this condition for now for all orders to get executed 
+        # if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and bool(self.additional_checks_passed):
             print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG['alpha_score_threshold']} AND additional checks passed")
             shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
             if shares > 0:
@@ -735,7 +741,7 @@ class Strategy:
                             'timestamp': pd.Timestamp.now()
                         }
 
-                        with self.manager_lock:
+                        with self.manager.manager_lock:
                             self.used_capital += shares * limit_price
                             self.used_margin = shares * limit_price
                             print(f"Used Margin: ${self.used_margin:.2f}")
