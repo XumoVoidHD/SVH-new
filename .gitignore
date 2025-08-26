@@ -5,4 +5,8 @@ logs/
 not used/
 
 # Python cache
-__pycache__/ 
+__pycache__/
+
+# Database files
+trades.db
+trading.db

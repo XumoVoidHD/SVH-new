@@ -1,0 +1,7 @@
+pandas>=1.5.0
+numpy>=1.21.0
+yfinance>=0.2.0
+schwabdev>=1.0.0
+streamlit>=1.28.0
+requests>=2.28.0
+pytz>=2022.1
