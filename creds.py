@@ -86,7 +86,7 @@ ALPHA_SCORE_CONFIG = {
 # Additional checks configuration
 ADDITIONAL_CHECKS_CONFIG = {
     'volume_multiplier': 2.0,
-    'vwap_slope_threshold': 0.1,
+    'vwap_slope_threshold': 0.005,
     'vwap_slope_period': 3  # minutes
 }
 

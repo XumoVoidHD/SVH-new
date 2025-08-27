@@ -112,7 +112,7 @@ class StockSelector:
             return [], []
 
         all_df = pd.DataFrame(self.qualified).sort_values(by="alpha_5d", ascending=False)
-        all_df.to_csv("filtered_all_valid.csv", index=False)
+        # all_df.to_csv("filtered_all_valid.csv", index=False)
 
         top_sector_stocks = self.get_top_sector_stocks()
         if not top_sector_stocks:
@@ -120,7 +120,7 @@ class StockSelector:
             return [], []
 
         top_df = pd.DataFrame(top_sector_stocks).sort_values(by="alpha_5d", ascending=False)
-        top_df.to_csv("filtered_top_sectors.csv", index=False)
+        # top_df.to_csv("filtered_top_sectors.csv", index=False)
 
         end_time = time.time()
         print(f"\nTime Taken: {end_time - start_time:.2f} seconds")

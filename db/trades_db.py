@@ -31,7 +31,8 @@ class TradesDatabase:
                     stop_loss_price REAL DEFAULT 0,
                     take_profit_price REAL DEFAULT 0,
                     used_margin REAL DEFAULT 0,
-                    pnl REAL DEFAULT 0,
+                    unrealized_pnl REAL DEFAULT 0,
+                    realized_pnl REAL DEFAULT 0,
                     entry_time TIMESTAMP,
                     close_time TIMESTAMP,
                     alpha_score_threshold REAL DEFAULT 75,
@@ -94,7 +95,7 @@ class TradesDatabase:
                     'score', 'additional_checks_passed', 'position_active',
                     'position_shares', 'current_price', 'entry_price', 
                     'stop_loss_price', 'take_profit_price', 'used_margin', 
-                    'pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
+                    'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
                     'risk_per_trade', 'max_daily_trades',
                     'daily_drawdown_limit', 'monthly_drawdown_limit',
                     'default_stop_loss', 'volatile_stop_loss', 'max_stop_loss',
@@ -149,7 +150,7 @@ class TradesDatabase:
                 'score', 'additional_checks_passed', 'position_active',
                 'position_shares', 'current_price', 'entry_price', 
                 'stop_loss_price', 'take_profit_price', 'used_margin', 
-                'pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
+                                 'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
                 'risk_per_trade', 'max_daily_trades',
                 'daily_drawdown_limit', 'monthly_drawdown_limit',
                 'default_stop_loss', 'volatile_stop_loss', 'max_stop_loss',
@@ -228,7 +229,7 @@ class TradesDatabase:
             
             cursor.execute('''
                 SELECT symbol, position_shares, entry_price, current_price, 
-                       stop_loss_price, take_profit_price, pnl, entry_time
+                       stop_loss_price, take_profit_price, unrealized_pnl, realized_pnl, entry_time
                 FROM stock_strategies 
                 WHERE position_active = 1
             ''')
@@ -237,7 +238,7 @@ class TradesDatabase:
             conn.close()
             
             columns = ['symbol', 'position_shares', 'entry_price', 'current_price', 
-                      'stop_loss_price', 'take_profit_price', 'pnl', 'entry_time']
+                      'stop_loss_price', 'take_profit_price', 'unrealized_pnl', 'realized_pnl', 'entry_time']
             
             return [dict(zip(columns, row)) for row in rows]
     
@@ -255,7 +256,8 @@ class TradesDatabase:
                     position_shares,
                     current_price,
                     entry_price,
-                    pnl,
+                    unrealized_pnl,
+                    realized_pnl,
                     total_trades,
                     winning_trades,
                     losing_trades,
@@ -268,7 +270,7 @@ class TradesDatabase:
             conn.close()
             
             columns = ['symbol', 'score', 'position_active', 'position_shares', 
-                      'current_price', 'entry_price', 'pnl', 'total_trades', 
+                      'current_price', 'entry_price', 'unrealized_pnl', 'realized_pnl', 'total_trades', 
                       'winning_trades', 'losing_trades', 'total_pnl']
             
             # Convert boolean fields from SQLite integers to Python booleans
