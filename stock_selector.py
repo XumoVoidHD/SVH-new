@@ -9,7 +9,7 @@ import creds
 class StockSelector:
     def __init__(self, csv_path='companies_by_marketcap.csv'):
         self.csv_path = csv_path
-        self.market_cap_filter = creds.MARKET_CAP
+        self.market_cap_filter = creds.STOCK_SELECTION['market_cap_min']
         self.client = SchwabBroker()
         self.batch_size = 50
 
@@ -36,7 +36,7 @@ class StockSelector:
                     price = q.get("mark") or q.get("lastPrice")
                     volume = q.get("totalVolume")
 
-                    if price and price >= 10 and volume and volume >= 1_000_000:
+                    if price and price >= creds.STOCK_SELECTION['price_min'] and volume and volume >= creds.STOCK_SELECTION['volume_min']:
                         self.filtered.append({
                             "symbol": symbol,
                             "price": price,
@@ -68,7 +68,7 @@ class StockSelector:
                     "alpha_5d": alpha_5d
                 })
 
-                if alpha_5d > 0.005:
+                if alpha_5d > creds.STOCK_SELECTION['alpha_threshold']:
                     self.qualified.append(stock)
                     self.sector_returns[sector].append(alpha_5d)
             except Exception as e:

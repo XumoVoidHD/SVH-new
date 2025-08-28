@@ -14,6 +14,7 @@ from db.trades_db import trades_db
 from fetch_marketcap_csv import fetch_marketcap_csv
 setup_logger()
 
+TESTING = True
 
 class Strategy:
     
@@ -34,7 +35,6 @@ class Strategy:
         self.profit_config = creds.PROFIT_CONFIG
         self.order_config = creds.ORDER_CONFIG
         self.trading_hours = creds.TRADING_HOURS
-        self.data_config = creds.DATA_CONFIG
         self.hedge_config = creds.HEDGE_CONFIG
         self.leverage_config = creds.LEVERAGE_CONFIG
         
@@ -258,6 +258,19 @@ class Strategy:
                 hedge_entry_price=xlf_price,
                 hedge_entry_time=datetime.now(pytz.timezone('America/New_York'))
             )
+
+            # trades_db.update_strategy_data(self.hedge_symbol,
+            #     position_active=True,
+            #     position_shares=0,
+            #     entry_price=0,
+            #     stop_loss_price=0,
+            #     take_profit_price=0,
+            #     entry_time=0,
+            #     current_price=0,
+            #     unrealized_pnl=0,
+            #     realized_pnl=0,
+            #     used_margin=0
+            # )
             
             print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
             print(f"Hedge position tracked in database for {self.stock}")
@@ -329,9 +342,9 @@ class Strategy:
             self.close_position('safety_exit', self.position_shares)
         
         # Close hedge if active
-        # if self.hedge_active:
-        #     print("3:35 PM Safety Exit: Closing hedge positions")
-        #     self.close_hedge()
+        if self.hedge_active:
+            print("3:35 PM Safety Exit: Closing hedge positions")
+            self.close_hedge()
     
     def market_on_close_exit(self):
         """Market-on-close exit at 4:00 PM"""
@@ -584,17 +597,17 @@ class Strategy:
     def calculate_position_size(self):
         """Calculate position size based on risk management rules with hedge and leverage"""
         
-        # # Step 1: Check hedge triggers and execute if needed
-        # hedge_level, hedge_beta = self.check_hedge_triggers()
-        # if hedge_level:
-        #     self.execute_hedge(hedge_level, hedge_beta)
+        # Step 1: Check hedge triggers and execute if needed
+        hedge_level, hedge_beta = self.check_hedge_triggers()
+        if hedge_level:
+            self.execute_hedge(hedge_level, hedge_beta)
         
-        # # Step 2: Check leverage conditions
-        # leverage_multiplier = self.check_leverage_conditions()
-        # self.current_leverage = leverage_multiplier
-
-        leverage_multiplier = 1.0
+        # Step 2: Check leverage conditions
+        leverage_multiplier = self.check_leverage_conditions()
         self.current_leverage = leverage_multiplier
+
+        # leverage_multiplier = 1.0
+        # self.current_leverage = leverage_multiplier
         
         # Get account equity from config
         account_equity = creds.EQUITY
@@ -763,49 +776,50 @@ class Strategy:
                     
     def run(self, i):
         while True:
-            # # Check for end-of-day exit times
-            # eastern_tz = pytz.timezone(self.trading_hours['timezone'])
-            # current_time = datetime.now(eastern_tz)
-            # current_time_str = current_time.strftime("%H:%M")
+            # Check for end-of-day exit times
+            eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+            current_time = datetime.now(eastern_tz)
+            current_time_str = current_time.strftime("%H:%M")
             
-            # # 3:30 PM - Systematic close of weak positions
-            # if current_time_str == "15:30":
-            #     self.end_of_day_weak_exit()
+            # 3:30 PM - Systematic close of weak positions
+            if current_time_str == "15:30":
+                self.end_of_day_weak_exit()
             
-            # # 3:35 PM - Safety exit all positions
-            # elif current_time_str == "15:35":
-            #     self.safety_exit_all()
+            # 3:35 PM - Safety exit all positions
+            elif current_time_str == "15:35":
+                self.safety_exit_all()
             
             # # 4:00 PM - Market-on-close for any remaining positions
             # elif current_time_str >= self.trading_hours['market_close']:
             #     self.market_on_close_exit()
             #     break  # End trading for the day
-            
-            # Check if we're in entry time windows
-            if self.is_entry_time_window():
-                print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
+
+            if not TESTING:            
+                # Check if we're in entry time windows
+                if self.is_entry_time_window():
+                    print(f"[{self.stock}] In entry time window - calculating indicators and processing scores")
+                    self.calculate_indicators()
+                    self.process_score()
+                else:
+                    # Outside entry windows - only monitor existing positions
+                    window_status = self.get_next_entry_window()
+                    print(f"[{self.stock}] {window_status} - only monitoring existing positions")
+                    
+                # Always monitor active positions regardless of time
+                if self.position_active and self.position_shares > 0:
+                    print(f"Starting position monitoring for {self.stock}...")
+                    self.start_individual_monitoring()
+                
+                # Sleep for a bit before next iteration if no active position
+                if not self.position_active:
+                    time.sleep(60*3)  # Wait 3 minutes before checking again
+            else:
                 self.calculate_indicators()
                 self.process_score()
-            else:
-                # Outside entry windows - only monitor existing positions
-                window_status = self.get_next_entry_window()
-                print(f"[{self.stock}] {window_status} - only monitoring existing positions")
-                
-            # Always monitor active positions regardless of time
-            if self.position_active and self.position_shares > 0:
-                print(f"Starting position monitoring for {self.stock}...")
-                self.start_individual_monitoring()
-            
-            # Sleep for a bit before next iteration if no active position
-            if not self.position_active:
-                time.sleep(60*3)  # Wait 3 minutes before checking again
-        
-            self.calculate_indicators()
-            self.process_score()
 
-            if self.position_active and self.position_shares > 0:
-                print(f"Starting position monitoring for {self.stock}...")
-                self.start_individual_monitoring()
+                if self.position_active and self.position_shares > 0:
+                    print(f"Starting position monitoring for {self.stock}...")
+                    self.start_individual_monitoring()
     
     def monitor_position(self):
         """Monitor position for stop loss and take profit conditions"""
@@ -1424,6 +1438,24 @@ class StrategyManager:
             self.stocks_dict = []
         # self.stocks_list = ["AAPL", "MSFT", "NVDA"]
         
+        # Add XLF to database for hedging - all threads can use it
+        hedge_symbol = self.config.HEDGE_CONFIG['hedge_symbol']
+        print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
+        trades_db.add_stocks_from_list([hedge_symbol])
+        
+        trades_db.update_strategy_data(hedge_symbol,
+            position_active=True,
+            position_shares=0,
+            entry_price=0,
+            stop_loss_price=0,
+            take_profit_price=0,
+            entry_time=0,
+            current_price=0,
+            unrealized_pnl=0,
+            realized_pnl=0,
+            used_margin=0                                
+        )
+        
         # List to track stocks that pass all entry conditions
         self.qualifying_stocks = []
         self.qualifying_stocks_lock = threading.Lock()  # Thread-safe access
@@ -1493,197 +1525,6 @@ class StrategyManager:
         vix_df = self.broker.get_historical_data(5, "APP")
         print(vix_df)
         exit()
-
-        """Test the database integration and strategy functionality"""
-        print("🧪 Starting Database Integration Test...")
-        
-        # Test 1: Check if database is initialized with stocks
-        print("\n1. Testing Database Initialization...")
-        summary_data = trades_db.get_strategy_summary()
-        if summary_data:
-            print(f"Database initialized with {len(summary_data)} stocks")
-            for stock in summary_data[:3]:  # Show first 3 stocks
-                print(f"   - {stock['symbol']}: Score={stock['score']}, Active={stock['position_active']}")
-        else:
-            print("No data found in database")
-        
-        # Test 2: Create a test strategy and update database
-        print("\n2. Testing Strategy Database Updates...")
-        test_stock = "META"
-        trades_db.add_stocks_from_list([test_stock])
-        test_strategy = Strategy(self, test_stock, self.broker, self.config)
-        
-        # Simulate strategy calculations
-        print(f"   Testing with {test_stock}...")
-        
-        # Test alpha score calculation
-        test_strategy.calculate_indicators()
-        test_strategy.calculate_alpha_score()
-        test_strategy.perform_additional_checks()
-        
-        print(f"   Alpha Score: {test_strategy.score}")
-        print(f"   Additional Checks: {bool(test_strategy.additional_checks_passed)}")
-        
-        # Test position size calculation
-        shares, entry_price, stop_loss, limit_price = test_strategy.calculate_position_size()
-        print(f"   Calculated Position: {shares} shares @ ${entry_price:.2f}")
-        print(f"   Stop Loss: ${stop_loss:.2f}")
-        print(f"   Limit Price: ${limit_price:.2f}")
-        
-        # Test 3: Check database updates
-        print("\n3. Verifying Database Updates...")
-        latest_data = trades_db.get_latest_strategy_data(test_stock)
-        if latest_data:
-            print(f" Database updated for {test_stock}")
-            print(f"   - Score: {latest_data['score']}")
-            print(f"   - Current Price: ${latest_data['current_price']:.2f}")
-            print(f"   - Stop Loss: ${latest_data['stop_loss_price']:.2f}")
-            print(f"   - Position Active: {bool(latest_data['position_active'])}")
-        else:
-            print(f"No database data found for {test_stock}")
-        
-        # Test 4: Place limit order and wait for price to reach limit
-        print("\n4. Placing Limit Order and Waiting for Fill...")
-        if shares > 0:
-            print(f"   Waiting for price to reach limit price: ${limit_price:.2f}")
-            print(f"   Order window: {creds.ORDER_CONFIG['order_window']} seconds")
-            
-            # Get current time in USA Eastern Time
-            eastern_tz = pytz.timezone('America/New_York')
-            curr_time = datetime.now(eastern_tz)
-            target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG['order_window'])
-            
-            order_filled = False
-            while curr_time < target_time and not order_filled:
-                current_price = test_strategy.broker.get_current_price(test_stock)
-                limit_price = current_price 
-                print(f"   Current price: ${current_price:.2f} | Limit price: ${limit_price:.2f}")
-                
-                # Check if current_price is None before comparison
-                if current_price is None:
-                    print(f"   Unable to get current price for {test_stock}, retrying...")
-                    time.sleep(1)
-                    curr_time = datetime.now(eastern_tz)
-                    continue
-                
-                if current_price >= limit_price:
-                    print(f"ORDER FILLED! Current price ${current_price:.2f} >= Limit price ${limit_price:.2f}")
-                    
-                    # Initialize position tracking variables (same as process_score)
-                    test_strategy.entry_price = limit_price
-                    test_strategy.stop_loss_price = stop_loss
-                    test_strategy.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG['profit_booking_levels'][0]['gain'])
-                    test_strategy.position_shares = shares
-                    test_strategy.position_active = True
-                    test_strategy.entry_time = datetime.now(eastern_tz)
-                    test_strategy.current_price = limit_price
-                    test_strategy.unrealized_pnl = 0.0
-                    test_strategy.realized_pnl = 0.0
-                    
-                    # Update database with position initialization
-                    trades_db.update_strategy_data(test_stock,
-                        position_active=True,
-                        position_shares=shares,
-                        entry_price=test_strategy.entry_price,
-                        stop_loss_price=test_strategy.stop_loss_price,
-                        take_profit_price=test_strategy.take_profit_price,
-                        entry_time=test_strategy.entry_time,
-                        current_price=test_strategy.current_price,
-                        unrealized_pnl=test_strategy.unrealized_pnl,
-                        realized_pnl=test_strategy.realized_pnl
-                    )
-                    
-                    print(f"   Position initialized for {test_stock}:")
-                    print(f"   - Entry Price: ${test_strategy.entry_price:.2f}")
-                    print(f"   - Stop Loss: ${test_strategy.stop_loss_price:.2f}")
-                    print(f"   - Take Profit: ${test_strategy.take_profit_price:.2f}")
-                    print(f"   - Entry Time: {test_strategy.entry_time}")
-                    
-                    order_filled = True
-                    break
-                else:
-                    print(f"   Waiting... Current price ${current_price:.2f} < Limit price ${limit_price:.2f}")
-                    time.sleep(1)
-                    curr_time = datetime.now(eastern_tz)
-            
-            if not order_filled:
-                print("Order not filled within time window")
-                return
-        
-        # Test 5: Check active positions
-        print("\n5. Testing Active Positions Query...")
-        active_positions = trades_db.get_all_active_positions()
-        if active_positions:
-            print(f"Found {len(active_positions)} active positions")
-            for pos in active_positions:
-                print(f"   - {pos['symbol']}: {pos['position_shares']} shares @ ${pos['entry_price']:.2f}")
-        else:
-            print("No active positions found")
-        
-        # Test 6: Simulate price movement and profit booking
-        print("\n6. Testing Profit Booking Logic...")
-        if shares > 0:
-            # Simulate price increase to trigger profit booking
-            test_strategy.current_price = entry_price * 1.02  # 2% gain
-            test_strategy.unrealized_pnl = (test_strategy.current_price - test_strategy.entry_price) * shares
-            
-            print(f"   Simulating 2% price increase...")
-            print(f"   New Price: ${test_strategy.current_price:.2f}")
-            print(f"   PnL: ${test_strategy.unrealized_pnl:.2f}")
-            
-            # Update database with new price
-            trades_db.update_strategy_data(test_stock,
-                current_price=test_strategy.current_price,
-                unrealized_pnl=test_strategy.unrealized_pnl
-            )
-            
-            # Test profit booking logic
-            test_strategy.check_take_profit()
-        
-        # Test 7: Final database summary
-        print("\n7. Final Database Summary...")
-        final_summary = trades_db.get_strategy_summary()
-        if final_summary:
-            test_stock_data = next((s for s in final_summary if s['symbol'] == test_stock), None)
-            if test_stock_data:
-                print(f" Final data for {test_stock}:")
-                print(f"   - Score: {test_stock_data['score']}")
-                print(f"   - Position Active: {bool(test_stock_data['position_active'])}")
-                print(f"   - Current Price: ${test_stock_data['current_price']:.2f}")
-                print(f"   - PnL: ${test_stock_data['pnl']:.2f}")
-        
-        print("\n Database Integration Test Complete!")
-        print(" Run 'streamlit run db_viewer.py' to view the dashboard")
-        
-        # Test 8: Test stop loss and take profit functionality
-        print("\n8. Testing Stop Loss and Take Profit...")
-        if test_strategy.position_active:
-            print(f"   Testing stop loss at ${test_strategy.stop_loss_price:.2f}")
-            print(f"   Testing take profit at ${test_strategy.take_profit_price:.2f}")
-            
-            # Simulate price movement to test SL/TP
-            test_strategy.current_price = test_strategy.stop_loss_price - 0.01  # Just below stop loss
-            test_strategy.unrealized_pnl = (test_strategy.current_price - test_strategy.entry_price) * shares
-            
-            print(f"   Simulated price: ${test_strategy.current_price:.2f}")
-            print(f"   PnL: ${test_strategy.unrealized_pnl:.2f}")
-            
-            # Update database with new price
-            trades_db.update_strategy_data(test_stock,
-                current_price=test_strategy.current_price,
-                unrealized_pnl=test_strategy.unrealized_pnl
-            )
-            
-            # Test stop loss logic
-            if test_strategy.current_price <= test_strategy.stop_loss_price:
-                print(f"Stop loss would trigger at this price")
-            else:
-                print(f"Stop loss not triggered yet")
-            
-            # Test take profit logic
-            test_strategy.check_take_profit()
-        else:
-            print("No active position to test SL/TP")
 
     
     def print_broker_summary(self):

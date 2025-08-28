@@ -35,16 +35,6 @@ class TradesDatabase:
                     realized_pnl REAL DEFAULT 0,
                     entry_time TIMESTAMP,
                     close_time TIMESTAMP,
-                    alpha_score_threshold REAL DEFAULT 75,
-                    risk_per_trade REAL DEFAULT 0.004,
-                    max_daily_trades INTEGER DEFAULT 10,
-                    daily_drawdown_limit REAL DEFAULT 0.02,
-                    monthly_drawdown_limit REAL DEFAULT 0.08,
-                    default_stop_loss REAL DEFAULT 0.015,
-                    volatile_stop_loss REAL DEFAULT 0.02,
-                    max_stop_loss REAL DEFAULT 0.04,
-                    atr_multiplier REAL DEFAULT 1.5,
-                    atr_period INTEGER DEFAULT 14,
                     profit_booking_levels TEXT,
                     trailing_exit_conditions TEXT,
                     trailing_stop_levels TEXT,
@@ -57,7 +47,16 @@ class TradesDatabase:
                     winning_trades INTEGER DEFAULT 0,
                     losing_trades INTEGER DEFAULT 0,
                     total_pnl REAL DEFAULT 0,
-                    avg_trade_duration REAL DEFAULT 0
+                    avg_trade_duration REAL DEFAULT 0,
+                    hedge_active BOOLEAN DEFAULT FALSE,
+                    hedge_shares INTEGER DEFAULT 0,
+                    hedge_symbol TEXT,
+                    hedge_level REAL DEFAULT 0,
+                    hedge_beta REAL DEFAULT 0,
+                    hedge_entry_price REAL DEFAULT 0,
+                    hedge_entry_time TIMESTAMP,
+                    hedge_exit_price REAL DEFAULT 0,
+                    hedge_pnl REAL DEFAULT 0
                 )
             ''')
             
@@ -95,16 +94,16 @@ class TradesDatabase:
                     'score', 'additional_checks_passed', 'position_active',
                     'position_shares', 'current_price', 'entry_price', 
                     'stop_loss_price', 'take_profit_price', 'used_margin', 
-                    'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
-                    'risk_per_trade', 'max_daily_trades',
-                    'daily_drawdown_limit', 'monthly_drawdown_limit',
-                    'default_stop_loss', 'volatile_stop_loss', 'max_stop_loss',
-                    'atr_multiplier', 'atr_period', 'profit_booking_levels',
+                    'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
+                    'profit_booking_levels',
                     'trailing_exit_conditions', 'trailing_stop_levels',
                     'profit_booked_flags', 'trailing_stop_flags',
                     'trailing_exit_monitoring', 'trailing_exit_start_time',
                     'trailing_exit_start_price', 'total_trades', 'winning_trades',
-                    'losing_trades', 'total_pnl', 'avg_trade_duration'
+                    'losing_trades', 'total_pnl', 'avg_trade_duration',
+                    'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
+                    'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
+                    'hedge_exit_price', 'hedge_pnl'
                 ]:
                     update_fields.append(f"{key} = ?")
                     values.append(value)
@@ -150,16 +149,16 @@ class TradesDatabase:
                 'score', 'additional_checks_passed', 'position_active',
                 'position_shares', 'current_price', 'entry_price', 
                 'stop_loss_price', 'take_profit_price', 'used_margin', 
-                                 'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time', 'alpha_score_threshold',
-                'risk_per_trade', 'max_daily_trades',
-                'daily_drawdown_limit', 'monthly_drawdown_limit',
-                'default_stop_loss', 'volatile_stop_loss', 'max_stop_loss',
-                'atr_multiplier', 'atr_period', 'profit_booking_levels',
+                'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
+                'profit_booking_levels',
                 'trailing_exit_conditions', 'trailing_stop_levels',
                 'profit_booked_flags', 'trailing_stop_flags',
                 'trailing_exit_monitoring', 'trailing_exit_start_time',
                 'trailing_exit_start_price', 'total_trades', 'winning_trades',
-                'losing_trades', 'total_pnl', 'avg_trade_duration'
+                'losing_trades', 'total_pnl', 'avg_trade_duration',
+                'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
+                'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
+                'hedge_exit_price', 'hedge_pnl'
             ]:
                 fields.append(key)
                 # Convert datetime objects to string if needed
@@ -213,7 +212,7 @@ class TradesDatabase:
                 data = dict(zip(columns, row))
                 
                 # Convert boolean fields from SQLite integers to Python booleans
-                boolean_fields = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring']
+                boolean_fields = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
                 for field in boolean_fields:
                     if field in data and data[field] is not None:
                         data[field] = bool(data[field])

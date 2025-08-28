@@ -1,6 +1,14 @@
-# Market cap filter
-MARKET_CAP = 2_000_000_000
+# Market cap filter (now configured in STOCK_SELECTION)
 EQUITY = 1000000
+
+STOCK_SELECTION = {
+    'market_cap_min': 2_000_000_000,  # $2B minimum market cap
+    'price_min': 10.0,                 # $10 minimum price
+    'volume_min': 1_000_000,           # 1M minimum daily volume
+    'alpha_threshold': 0.005,          # 0.5% minimum 5-day alpha
+    # 'max_sector_weight': 0.30,         # Maximum 30% allocation per sector
+    # 'top_sectors_count': 3             # Focus on top 3 sectors
+}
 
 # =============================================================================
 # SVH ALPHA INTRADAY TRADING STRATEGY CONFIGURATION
@@ -92,23 +100,13 @@ ADDITIONAL_CHECKS_CONFIG = {
 
 # Risk management configuration
 RISK_CONFIG = {
-    'alpha_score_threshold': 1,
+    'alpha_score_threshold': 85,
     'risk_per_trade': 0.004,  # 0.4% of equity per trade
     'max_daily_trades': 10,
     'daily_drawdown_limit': 0.02,  # 2%
     'monthly_drawdown_limit': 0.08,  # 8%
     'drawdown_alert': 0.015  # 1.5%
 }
-
-# Stop loss configuration
-STOP_LOSS_CONFIG = {
-    'default_stop_loss': 0.015,  # 1.5%
-    'volatile_stop_loss': 0.02,  # 2%
-    'max_stop_loss': 0.04,  # 4%
-    'atr_multiplier': 1.5,
-    'atr_period': 14
-}
-
 # Stop loss configuration
 STOP_LOSS_CONFIG = {
     'default_stop_loss': 0.015,  # 1.5%
@@ -190,13 +188,6 @@ TRADING_HOURS = {
     'morning_entry_end': '11:15',
     'afternoon_entry_start': '13:30',
     'afternoon_entry_end': '14:30'
-}
-
-# Data storage configuration
-DATA_CONFIG = {
-    'save_to_csv': True,
-    'csv_directory': 'data/',
-    'include_timestamp': True
 }
 
 # =============================================================================

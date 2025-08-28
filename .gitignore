@@ -8,8 +8,7 @@ not used/
 __pycache__/
 
 # Database files
-trades.db
-trading.db
+*.db
 
 # CSV data files
-companies_by_marketcap.csv
+*.csv
