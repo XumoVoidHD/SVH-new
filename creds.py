@@ -1,5 +1,6 @@
 # Market cap filter (now configured in STOCK_SELECTION)
 EQUITY = 1000000
+TESTING = True
 
 STOCK_SELECTION = {
     'market_cap_min': 2_000_000_000,  # $2B minimum market cap

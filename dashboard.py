@@ -13,6 +13,16 @@ st.set_page_config(
 
 st.title("📊 SVH Trading Dashboard")
 st.markdown("Configuration editor and database viewer for your trading system")
+st.markdown("---")
+st.write("**🧪 Testing Configuration**")
+
+if hasattr(creds, 'TESTING'):
+    testing_enabled = st.checkbox(
+        "Testing Mode Enabled", 
+        value=creds.TESTING,
+        key="testing_enabled",
+        help="Enable/disable testing mode for the trading system"
+    )
 
 # Function to get database connection
 def get_db_connection():

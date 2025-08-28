@@ -14,7 +14,7 @@ from db.trades_db import trades_db
 from fetch_marketcap_csv import fetch_marketcap_csv
 setup_logger()
 
-TESTING = True
+TESTING = creds.TESTING
 
 class Strategy:
     
