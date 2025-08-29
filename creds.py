@@ -1,6 +1,6 @@
 # Market cap filter (now configured in STOCK_SELECTION)
 EQUITY = 200000
-TESTING = True
+TESTING = FALSE
 VWAP_SHOULD_BE_BELOW_PRICE = True
 
 STOCK_SELECTION = {
