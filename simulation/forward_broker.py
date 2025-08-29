@@ -6,6 +6,7 @@ import time
 import os
 import pandas as pd
 from typing import Optional, Dict, Callable, List, Generator, Tuple
+import pytz
 
 # Replace Angel WebSocket with Schwab wrapper
 from .schwab_broker import SchwabBroker
@@ -32,7 +33,7 @@ class Order:
     tp: Optional[float]
     triggerprice: Optional[float]
     status: OrderStatus = OrderStatus.NEW
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(pytz.timezone('America/Chicago')))
     filled_qty: float = 0.0
     fill_price: Optional[float] = None
     fill_time: Optional[datetime] = None
@@ -45,7 +46,7 @@ class Trade:
     exec_price: float
     commission: float
     pnl: float
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(pytz.timezone('America/Chicago')))
 
 @dataclass
 class Position:
@@ -96,7 +97,7 @@ class Position:
         if self.status == "CLOSED":
             self.status = "OPEN"
             self.direction = direction
-            self.open_time = datetime.now()
+            self.open_time = datetime.now(pytz.timezone('America/Chicago'))
             self.open_price = price
 
         self.qty += qty
@@ -124,7 +125,7 @@ class Position:
 
         if self.qty == 0:
             self.status = "CLOSED"
-            self.close_time = datetime.now()
+            self.close_time = datetime.now(pytz.timezone('America/Chicago'))
             self.close_price = price
             self.direction = 0
 
@@ -170,7 +171,7 @@ class ForwardBroker:
         self._processing_thread = None
         self._stop_event = threading.Event()
         self.db = SQLDB()  # Initialize the SQLDB instance
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")  # Unique session ID
+        self.session_id = datetime.now(pytz.timezone('America/Chicago')).strftime("%Y%m%d_%H%M%S")  # Unique session ID
         self.orders: Dict[int, Order] = {}
         self.repopulate(self.db.get_orders(),self.db.get_trades(),self.get_positions())
         
@@ -468,7 +469,7 @@ class ForwardBroker:
             order = self.orders.get(order_id)
             if order and order.status == OrderStatus.NEW:
                 order.status = OrderStatus.CANCELED
-                order.fill_time = datetime.now()
+                order.fill_time = datetime.now(pytz.timezone('America/Chicago'))
                 
                 # Update order in database
                 self.db.update_order(
@@ -562,7 +563,7 @@ class ForwardBroker:
                 exec_price=price,
                 commission=commission,
                 pnl=0.0,
-                timestamp=datetime.now()
+                timestamp=datetime.now(pytz.timezone('America/Chicago'))
             )
             self.trades.append(trade)
 
@@ -582,7 +583,7 @@ class ForwardBroker:
                     unrealized_pnl=0.0,
                     realized_pnl=0.0,
                     status="OPEN",
-                    open_time=datetime.now(),
+                    open_time=datetime.now(pytz.timezone('America/Chicago')),
                     open_price=price,
                     trade_ids=[trade_id],
                     order_ids=[str(order.id)]
@@ -642,7 +643,7 @@ class ForwardBroker:
             order.status = OrderStatus.FILLED
             order.filled_qty = order.qty
             order.fill_price = price
-            order.fill_time = datetime.now()
+            order.fill_time = datetime.now(pytz.timezone('America/Chicago'))
 
             # Update cash based on order direction
             if order.qty > 0:  # Buy order - deduct cash

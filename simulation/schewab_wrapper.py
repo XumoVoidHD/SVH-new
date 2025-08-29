@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
+import pytz
 
 market_data_endpoint = "https://api.schwabapi.com/marketdata/v1"
 
@@ -34,7 +35,7 @@ class SchwabBroker:
             tokens = json.load(f)
 
         tokens["SCHWAB_ACCESS_TOKEN"] = access_token
-        tokens["SCHWAB_REFRESH_TOKEN_CREATED_ON"] = datetime.now().isoformat()
+        tokens["SCHWAB_REFRESH_TOKEN_CREATED_ON"] = datetime.now(pytz.timezone('America/Chicago')).isoformat()
 
         with open(self.token_file, "w") as f:
             json.dump(tokens, f, indent=2)
@@ -77,7 +78,7 @@ class SchwabBroker:
             try:
                 if self.created_at:
                     created_dt = datetime.fromisoformat(self.created_at)
-                    age = datetime.now() - created_dt
+                    age = datetime.now(pytz.timezone('America/Chicago')) - created_dt
                     if age >= timedelta(minutes=30):
                         print("Auto-refreshing token...")
                         self.refresh_access_token(self.refresh_token)

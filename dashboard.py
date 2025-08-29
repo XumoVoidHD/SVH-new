@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 from datetime import datetime
+import pytz
 import creds
 from streamlit_autorefresh import st_autorefresh
 # Page configuration
@@ -63,14 +64,71 @@ def main():
         st.header("🗄️ Database Viewer")
         st.markdown("View raw data from your `trades.db` database")
         
-        # Manual refresh button
-        if st.button("🔄 Refresh Data", type="primary"):
-            st.rerun()
+        # Database management buttons
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔄 Refresh Data", type="primary"):
+                st.rerun()
+        
+        with col2:
+            if st.button("🗄️ Initialize Database", type="secondary", help="Create the database table if it doesn't exist"):
+                try:
+                    # Create a simple database connection to trigger table creation
+                    import sqlite3
+                    conn = sqlite3.connect('trades.db')
+                    cursor = conn.cursor()
+                    
+                    # Create the stock_strategies table
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS stock_strategies (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            symbol TEXT UNIQUE NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            score REAL DEFAULT 0,
+                            additional_checks_passed BOOLEAN DEFAULT FALSE,
+                            position_active BOOLEAN DEFAULT FALSE,
+                            position_shares INTEGER DEFAULT 0,
+                            current_price REAL DEFAULT 0,
+                            entry_price REAL DEFAULT 0,
+                            stop_loss_price REAL DEFAULT 0,
+                            take_profit_price REAL DEFAULT 0,
+                            used_margin REAL DEFAULT 0,
+                            unrealized_pnl REAL DEFAULT 0,
+                            realized_pnl REAL DEFAULT 0,
+                            entry_time TIMESTAMP,
+                            close_time TIMESTAMP,
+                            hedge_active BOOLEAN DEFAULT FALSE,
+                            hedge_shares INTEGER DEFAULT 0,
+                            hedge_symbol TEXT,
+                            hedge_level REAL DEFAULT 0,
+                            hedge_beta REAL DEFAULT 0,
+                            hedge_entry_price REAL DEFAULT 0,
+                            hedge_entry_time TIMESTAMP,
+                            hedge_exit_price REAL DEFAULT 0,
+                            hedge_pnl REAL DEFAULT 0
+                        )
+                    ''')
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ Database table created successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to create database table: {e}")
         
         # Connect to database
         conn = get_db_connection()
         if not conn:
             st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
+            return
+        
+        # Check if stock_strategies table exists
+        table_info = get_table_info(conn)
+        if 'stock_strategies' not in table_info:
+            st.error("❌ The 'stock_strategies' table does not exist in the database.")
+            st.info("💡 This usually means the database hasn't been properly initialized. Try running the main trading application first.")
+            conn.close()
             return
         
         # Get data from stock_strategies table (main table in trades.db)
@@ -80,22 +138,45 @@ def main():
             # Convert to DataFrame and display
             df = pd.DataFrame(data, columns=column_names)
             
+            # Fix data type issues for Streamlit compatibility
+            # Convert boolean columns from bytes/ints to proper booleans
+            boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+            for col in boolean_columns:
+                if col in df.columns:
+                    # Convert bytes/ints to boolean
+                    df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
+            
+            # Convert numeric columns to proper types
+            numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
+                              'take_profit_price', 'used_margin', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
+                              'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
             # Add summary row for PnL if the table has unrealized_pnl column
             if 'unrealized_pnl' in df.columns:
-                # Calculate total unrealized PnL
+                # Calculate totals
                 total_unrealized_pnl = df['unrealized_pnl'].sum()
+                total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
+                total_combined_pnl = total_unrealized_pnl + total_realized_pnl
                 
-                # Display total unrealized PnL
-                st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                # Display PnL metrics in a single row with 3 columns
+                col1, col2, col3 = st.columns(3)
                 
-                # Show realized PnL if available
-                if 'realized_pnl' in df.columns:
-                    total_realized_pnl = df['realized_pnl'].sum()
+                with col1:
+                    st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                
+                with col2:
                     st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
-                    
-                    # Show combined PnL
-                    total_combined_pnl = total_unrealized_pnl + total_realized_pnl
+                
+                with col3:
                     st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                
+                # Display used margin below PnL metrics
+                if 'used_margin' in df.columns:
+                    total_used_margin = df['used_margin'].sum()
+                    st.metric("Total Used Margin", f"${total_used_margin:,.2f}")
                 
                 # Add stock selection statistics
                 st.markdown("---")
@@ -159,7 +240,7 @@ def main():
             st.download_button(
                 label="Download data as CSV",
                 data=csv,
-                file_name=f"trades_db_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"trades_db_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
         else:
@@ -278,9 +359,9 @@ def main():
                     value=indicators_config.get('ema1', {}).get('params', {}).get('length', 5), 
                     key="ema1_length"
                 )
-                ema1_timeframes = st.multiselect(
-                    "EMA1 Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+            ema1_timeframes = st.multiselect(
+                "EMA1 Timeframes:", 
+                ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
                     default=indicators_config.get('ema1', {}).get('timeframes', ["5min"]),
                     key="ema1_timeframes"
                 )
@@ -292,12 +373,12 @@ def main():
                     value=indicators_config.get('ema2', {}).get('params', {}).get('length', 20), 
                     key="ema2_length"
                 )
-                ema2_timeframes = st.multiselect(
-                    "EMA2 Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+            ema2_timeframes = st.multiselect(
+                "EMA2 Timeframes:", 
+                ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
                     default=indicators_config.get('ema2', {}).get('timeframes', ["20min"]),
                     key="ema2_timeframes"
-                )
+            )
             with col3:
                 st.write("**Current Values:**")
                 st.write(f"EMA1: {ema1_length} periods")
@@ -332,10 +413,10 @@ def main():
                 )
             with col4:
                 macd_timeframes = st.multiselect(
-                    "Timeframes:", 
+                        "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('macd', {}).get('timeframes', ["3min"]),
-                    key="macd_timeframes"
+                        default=indicators_config.get('macd', {}).get('timeframes', ["3min"]),
+                        key="macd_timeframes"
                 )
             
             # ADX Settings - Compact layout
@@ -351,10 +432,10 @@ def main():
                 )
             with col2:
                 adx_timeframes = st.multiselect(
-                    "Timeframes:", 
+                        "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('adx', {}).get('timeframes', ["3min"]),
-                    key="adx_timeframes"
+                        default=indicators_config.get('adx', {}).get('timeframes', ["3min"]),
+                        key="adx_timeframes"
                 )
             
             # Volume Average Settings - Compact layout
@@ -370,11 +451,11 @@ def main():
                 )
             with col2:
                 volume_timeframes = st.multiselect(
-                    "Timeframes:", 
+                        "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]),
-                    key="volume_timeframes"
-                )
+                        default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]),
+                        key="volume_timeframes"
+                    )
                 
             # Additional Checks Configuration
             st.markdown("---")
@@ -985,6 +1066,7 @@ def main():
 
         with tab7:
             st.subheader("⏰ Trading Hours Configuration")
+            st.info("🕐 **Note:** All times are displayed in Central Standard Time (CST)")
             
             if hasattr(creds, 'TRADING_HOURS'):
                 trading_hours_config = creds.TRADING_HOURS
@@ -1003,9 +1085,9 @@ def main():
                 )
                 timezone = st.selectbox(
                     "Timezone:", 
-                    ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"],
-                    index=["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"].index(
-                        trading_hours_config.get('timezone', 'America/New_York')
+                    ["America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles"],
+                    index=["America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles"].index(
+                        trading_hours_config.get('timezone', 'America/Chicago')
                     )
                 )
             

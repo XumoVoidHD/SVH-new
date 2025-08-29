@@ -12,6 +12,7 @@ from helpers import vwap, ema, macd, adx, atr
 from log import setup_logger
 from db.trades_db import trades_db
 from fetch_marketcap_csv import fetch_marketcap_csv
+from deldb import rename_to_creation_date
 setup_logger()
 
 TESTING = creds.TESTING
@@ -256,7 +257,7 @@ class Strategy:
                 hedge_level=hedge_level,
                 hedge_beta=beta,
                 hedge_entry_price=xlf_price,
-                hedge_entry_time=datetime.now(pytz.timezone('America/New_York'))
+                hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
             )
 
             # trades_db.update_strategy_data(self.hedge_symbol,
@@ -308,7 +309,7 @@ class Strategy:
                 hedge_active=False,
                 hedge_shares=0,
                 hedge_exit_price=current_xlf_price,
-                hedge_exit_time=datetime.now(pytz.timezone('America/New_York')),
+                hedge_exit_time=datetime.now(pytz.timezone('America/Chicago')),
                 hedge_pnl=hedge_pnl
             )
             
@@ -648,8 +649,8 @@ class Strategy:
         # Check if VWAP is below current price (required condition)
         if vwap_value >= current_price:
             print(f"WARNING: VWAP (${vwap_value:.2f}) is NOT below current price (${current_price:.2f}) - skipping order")
-            vwap_value = current_price
-            
+            if not creds.VWAP_SHOULD_BE_BELOW_PRICE:
+                vwap_value = current_price
         
         offset_pct = random.uniform(creds.ORDER_CONFIG['limit_offset_min'], creds.ORDER_CONFIG['limit_offset_max'])  # 0.03% to 0.07%
         limit_price = vwap_value * (1 + offset_pct)  # Slightly above VWAP for buy orders
@@ -662,8 +663,7 @@ class Strategy:
         
         # Update database with current price and position calculations
         trades_db.update_strategy_data(self.stock, 
-            current_price=current_price,
-            stop_loss_price=stop_loss_price
+            current_price=current_price
         )
         
         return shares, current_price, stop_loss_price, limit_price
@@ -703,9 +703,9 @@ class Strategy:
                 print(f"  - Stop Loss: ${stop_loss:.2f}")
                 print(f"  - Exit: Market-On-Close at 4:00 PM ET")
                 
-                # Get current time in USA Eastern Time
-                eastern_tz = pytz.timezone('America/New_York')
-                curr_time = datetime.now(eastern_tz)
+                # Get current time in USA Central Time
+                central_tz = pytz.timezone('America/Chicago')
+                curr_time = datetime.now(central_tz)
                 target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG['order_window'])
                 
                 while curr_time < target_time:
@@ -731,9 +731,14 @@ class Strategy:
                         self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG['profit_booking_levels'][0]['gain'])  # Use 1% from profit booking levels
                         self.position_shares = shares
                         self.position_active = True
-                        # Get current time in USA Eastern Time
-                        eastern_tz = pytz.timezone('America/New_York')
-                        self.entry_time = datetime.now(eastern_tz)
+                        
+                        # Reset profit booking and trailing stop levels for new position
+                        self.profit_booking_levels_remaining = creds.PROFIT_CONFIG['profit_booking_levels'].copy()
+                        self.trailing_stop_levels_remaining = creds.STOP_LOSS_CONFIG['trailing_stop_levels'].copy()
+                        print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
+                        # Get current time in USA Central Time
+                        central_tz = pytz.timezone('America/Chicago')
+                        self.entry_time = datetime.now(central_tz)
                         self.current_price = limit_price
                         self.unrealized_pnl = 0.0
                         self.realized_pnl = 0.0
@@ -777,8 +782,8 @@ class Strategy:
     def run(self, i):
         while True:
             # Check for end-of-day exit times
-            eastern_tz = pytz.timezone(self.trading_hours['timezone'])
-            current_time = datetime.now(eastern_tz)
+            central_tz = pytz.timezone(self.trading_hours['timezone'])
+            current_time = datetime.now(central_tz)
             current_time_str = current_time.strftime("%H:%M")
             
             # 3:30 PM - Systematic close of weak positions
@@ -874,40 +879,11 @@ class Strategy:
     def check_take_profit(self):
         current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
 
-        # Profit Booking Logic using PROFIT_CONFIG
-        for i, level in enumerate(creds.PROFIT_CONFIG['profit_booking_levels']):
-            gain_threshold = level['gain']
-            exit_pct = level['exit_pct']
-            
-            # Check if we haven't already booked profit at this level
-            if current_gain_pct >= gain_threshold:
-                shares_to_sell = int(self.position_shares * exit_pct)
-                if shares_to_sell > 0:
-                    self.close_position(f'profit_booking_{i+1}', shares_to_sell)
-                    print(f"Profit Booking {i+1}: Sold {shares_to_sell} shares at {gain_threshold*100:.1f}% gain")
-                    
-                    # Update database with profit booking
-                    trades_db.update_strategy_data(self.stock,
-                        profit_booked_flags={f'profit_booked_{i+1}': True}
-                    )
+        # Profit Booking Logic - handled by _check_profit_booking method
+        self._check_profit_booking(current_gain_pct, self.current_price)
         
-        # Trailing Stop Logic using STOP_LOSS_CONFIG
-        for i, level in enumerate(creds.STOP_LOSS_CONFIG['trailing_stop_levels']):
-            gain_threshold = level['gain']
-            new_stop_pct = level['new_stop_pct']
-            
-            # Check if we haven't already set trailing stop at this level
-            if current_gain_pct >= gain_threshold:
-                new_stop_price = self.entry_price * (1 + new_stop_pct)
-                if new_stop_price > self.stop_loss_price:
-                    self.stop_loss_price = new_stop_price
-                    print(f"Trailing Stop {i+1}: Moved stop loss to +{new_stop_pct*100:.2f}% (${self.stop_loss_price:.2f})")
-                    
-                    # Update database with trailing stop
-                    trades_db.update_strategy_data(self.stock,
-                        stop_loss_price=self.stop_loss_price,
-                        trailing_stop_flags={f'trailing_stop_{i+1}_set': True}
-                    )
+        # Trailing Stop Logic - handled by _check_trailing_stops method
+        self._check_trailing_stops(current_gain_pct, self.current_price)
 
         # Trailing Exit Logic using PROFIT_CONFIG
         trailing_conditions = creds.PROFIT_CONFIG['trailing_exit_conditions']
@@ -919,9 +895,9 @@ class Strategy:
             # Start monitoring if not already started
             if not self.trailing_exit_monitoring:
                 self.trailing_exit_monitoring = True
-                # Get current time in USA Eastern Time
-                eastern_tz = pytz.timezone('America/New_York')
-                self.trailing_exit_start_time = datetime.now(eastern_tz)
+                # Get current time in USA Central Time
+                central_tz = pytz.timezone('America/Chicago')
+                self.trailing_exit_start_time = datetime.now(central_tz)
                 self.trailing_exit_start_price = self.current_price
                 print(f"Starting trailing exit monitoring at {gain_threshold*100:.1f}% gain")
                 print(f"Monitoring for {drop_threshold*100:.1f}% price drop for {monitor_period} minutes, checking every second")
@@ -935,14 +911,14 @@ class Strategy:
                 
                 # Start active monitoring for the specified period
                 monitor_period_seconds = monitor_period * 60  # Convert minutes to seconds
-                start_monitoring_time = datetime.now(eastern_tz)
+                start_monitoring_time = datetime.now(central_tz)
                 
                 print(f"Starting active monitoring for {monitor_period_seconds} seconds...")
                 
                 while True:
                     try:
                         # Check if monitoring period has expired
-                        current_time = datetime.now(eastern_tz)
+                        current_time = datetime.now(central_tz)
                         elapsed_seconds = (current_time - start_monitoring_time).total_seconds()
                         
                         if elapsed_seconds >= monitor_period_seconds:
@@ -1028,9 +1004,16 @@ class Strategy:
         if self.position_shares <= 0:
             # Full position closure
             self.position_active = False
-            # Get current time in USA Eastern Time
-            eastern_tz = pytz.timezone('America/New_York')
-            self.close_time = datetime.now(eastern_tz)
+            
+            # Reset profit booking and trailing stop levels for next position
+            if hasattr(self, 'profit_booking_levels_remaining'):
+                delattr(self, 'profit_booking_levels_remaining')
+            if hasattr(self, 'trailing_stop_levels_remaining'):
+                delattr(self, 'trailing_stop_levels_remaining')
+            
+            # Get current time in USA Central Time
+            central_tz = pytz.timezone('America/Chicago')
+            self.close_time = datetime.now(central_tz)
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
@@ -1052,10 +1035,9 @@ class Strategy:
                 print(f"  - Reason: {reason}")
                 
                 # Update database with position closure
-                trades_db.update_strategy_data(self.stock,
+                trades_db.update_strategy_data(self.stock,  
                     position_active=False,
                     position_shares=0,
-                    close_time=self.close_time,
                     realized_pnl=self.manager.realized_pnl,
                     unrealized_pnl=0,
                     current_price=current_price
@@ -1081,7 +1063,14 @@ class Strategy:
     
     def _check_profit_booking(self, current_gain_pct, current_price):
         """Check profit booking levels"""
-        for level in creds.PROFIT_CONFIG['profit_booking_levels']:
+        # Create a local copy of profit booking levels to avoid modifying the global config
+        if not hasattr(self, 'profit_booking_levels_remaining'):
+            self.profit_booking_levels_remaining = creds.PROFIT_CONFIG['profit_booking_levels'].copy()
+            levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.profit_booking_levels_remaining])
+            print(f"[{self.stock}] Profit booking levels initialized: {levels_str}")
+        
+        # Check each remaining level
+        for level in self.profit_booking_levels_remaining[:]:  # Use slice copy to avoid modification during iteration
             gain_threshold = level['gain']
             exit_pct = level['exit_pct']
             
@@ -1091,14 +1080,29 @@ class Strategy:
                 if shares_to_sell > 0:
                     # Close partial position
                     self.close_position('profit_booking', shares_to_sell)
+                    print(f"[{self.stock}] Profit Booking: Sold {shares_to_sell} shares at {gain_threshold*100:.1f}% gain")
                     
-                    # Remove this level from future checks
-                    creds.PROFIT_CONFIG['profit_booking_levels'].remove(level)
+                    # Remove this level from remaining levels for this strategy instance
+                    self.profit_booking_levels_remaining.remove(level)
+                    remaining_levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.profit_booking_levels_remaining])
+                    print(f"[{self.stock}] Remaining profit booking levels: {remaining_levels_str}")
+                    
+                    # Update database with profit booking
+                    trades_db.update_strategy_data(self.stock,
+                        profit_booked_flags={f'profit_booked_{gain_threshold*100:.0f}pct': True}
+                    )
                     break
     
     def _check_trailing_stops(self, current_gain_pct, current_price):
         """Check trailing stop levels"""
-        for level in creds.STOP_LOSS_CONFIG['trailing_stop_levels']:
+        # Create a local copy of trailing stop levels to avoid modifying the global config
+        if not hasattr(self, 'trailing_stop_levels_remaining'):
+            self.trailing_stop_levels_remaining = creds.STOP_LOSS_CONFIG['trailing_stop_levels'].copy()
+            levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.trailing_stop_levels_remaining])
+            print(f"[{self.stock}] Trailing stop levels initialized: {levels_str}")
+        
+        # Check each remaining level
+        for level in self.trailing_stop_levels_remaining[:]:  # Use slice copy to avoid modification during iteration
             gain_threshold = level['gain']
             new_stop_pct = level['new_stop_pct']
             
@@ -1106,10 +1110,18 @@ class Strategy:
                 # Move stop loss to new level
                 new_stop_price = self.entry_price * (1 + new_stop_pct)
                 self.stop_loss_price = new_stop_price
-                print(f"TRAILING STOP: {self.stock} - Moved SL to ${new_stop_price:.2f} at {gain_threshold*100:.1f}% gain")
+                print(f"[{self.stock}] TRAILING STOP: Moved SL to ${new_stop_price:.2f} at {gain_threshold*100:.1f}% gain")
                 
-                # Remove this level from future checks
-                creds.STOP_LOSS_CONFIG['trailing_stop_levels'].remove(level)
+                # Remove this level from remaining levels for this strategy instance
+                self.trailing_stop_levels_remaining.remove(level)
+                remaining_levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.trailing_stop_levels_remaining])
+                print(f"[{self.stock}] Remaining trailing stop levels: {remaining_levels_str}")
+                
+                # Update database with trailing stop
+                trades_db.update_strategy_data(self.stock,
+                    stop_loss_price=self.stop_loss_price,
+                    trailing_stop_flags={f'trailing_stop_{gain_threshold*100:.0f}pct_set': True}
+                )
                 break
     
     def _check_trailing_exit(self, current_gain_pct, current_price):
@@ -1118,9 +1130,9 @@ class Strategy:
         
         if current_gain_pct >= exit_config['gain_threshold']:
             # Check if we should exit based on price drop
-            # Get current time in USA Eastern Time
-            eastern_tz = pytz.timezone('America/New_York')
-            self.trailing_start_time = datetime.now(eastern_tz)
+            # Get current time in USA Central Time
+            central_tz = pytz.timezone('America/Chicago')
+            self.trailing_start_time = datetime.now(central_tz)
             self.max_price_since_trailing = current_price
             print(f"TRAILING EXIT MONITORING: {self.stock} - Started monitoring for exit conditions")
             
@@ -1128,9 +1140,9 @@ class Strategy:
             self.max_price_since_trailing = max(self.max_price_since_trailing, current_price)
             
             # Check time and price drop
-            # Get current time in USA Eastern Time for calculation
-            eastern_tz = pytz.timezone('America/New_York')
-            time_since_trailing = datetime.now(eastern_tz) - self.trailing_start_time
+            # Get current time in USA Central Time for calculation
+            central_tz = pytz.timezone('America/Chicago')
+            time_since_trailing = datetime.now(central_tz) - self.trailing_start_time
             if time_since_trailing.total_seconds() <= exit_config['monitor_period'] * 60:
                 price_drop = (self.max_price_since_trailing - current_price) / self.max_price_since_trailing
                 if price_drop >= exit_config['drop_threshold']:
@@ -1178,7 +1190,7 @@ class Strategy:
             'pnl': self.unrealized_pnl,  # For backward compatibility
             'pnl_pct': ((self.current_price - self.entry_price) / self.entry_price * 100) if self.entry_price > 0 else 0,
             'entry_time': self.entry_time,
-            'duration': (datetime.now(pytz.timezone('America/New_York')) - self.entry_time) if self.entry_time else None
+            'duration': (datetime.now(pytz.timezone('America/Chicago')) - self.entry_time) if self.entry_time else None
         }
     
     def print_position_summary(self):
@@ -1213,6 +1225,12 @@ class Strategy:
         self.realized_pnl = 0
         self.entry_time = None
         self.close_time = None
+        
+        # Reset profit booking and trailing stop levels
+        if hasattr(self, 'profit_booking_levels_remaining'):
+            delattr(self, 'profit_booking_levels_remaining')
+        if hasattr(self, 'trailing_stop_levels_remaining'):
+            delattr(self, 'trailing_stop_levels_remaining')
         
         # Update database with reset
         trades_db.update_strategy_data(self.stock,
@@ -1474,9 +1492,9 @@ class StrategyManager:
                     total_pnl = self.broker.get_total_pnl()  # Must return realized + unrealized
 
                     print(f"[Drawdown] PnL: {total_pnl:.2f}, Threshold: {-threshold}")
-                    # Get current time in USA Eastern Time
-                    eastern_tz = pytz.timezone('America/New_York')
-                    now = datetime.now(eastern_tz)
+                    # Get current time in USA Central Time
+                    central_tz = pytz.timezone('America/Chicago')
+                    now = datetime.now(central_tz)
                     current_time_str = now.strftime("%H:%M")
                     
                     if total_pnl <= -threshold and not self.max_drawdown_triggered:
@@ -1485,7 +1503,7 @@ class StrategyManager:
                         self.stop_event.set()
                         
                     if current_time_str >= self.config.TRADING_HOURS['market_close']:
-                        print(f"Exit time reached at {current_time_str} ET")
+                        print(f"Exit time reached at {current_time_str} CT")
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
                             
@@ -1587,6 +1605,8 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
+    # x = rename_to_creation_date()
+    # print(x)
     fetch_marketcap_csv()
     manager = StrategyManager()
     manager.run()

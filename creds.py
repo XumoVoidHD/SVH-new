@@ -1,6 +1,7 @@
 # Market cap filter (now configured in STOCK_SELECTION)
-EQUITY = 1000000
+EQUITY = 200000
 TESTING = True
+VWAP_SHOULD_BE_BELOW_PRICE = True
 
 STOCK_SELECTION = {
     'market_cap_min': 2_000_000_000,  # $2B minimum market cap
@@ -184,7 +185,7 @@ ORDER_CONFIG = {
 TRADING_HOURS = {
     'market_open': '09:30',
     'market_close': '16:00',
-    'timezone': 'America/New_York',
+            'timezone': 'America/Chicago',
     'morning_entry_start': '10:00',
     'morning_entry_end': '11:15',
     'afternoon_entry_start': '13:30',
