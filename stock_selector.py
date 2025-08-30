@@ -3,13 +3,33 @@ import time
 from collections import defaultdict
 import yfinance as yf
 from simulation.schwab_broker import SchwabBroker
-import creds
+import json
+from types import SimpleNamespace
+
+
+def load_config(json_file='creds.json'):
+    """Load configuration from JSON file and make it accessible like a module"""
+    with open(json_file, 'r') as f:
+        config_dict = json.load(f)
+    
+    # Convert dict to object with dot notation access
+    def dict_to_obj(d):
+        if isinstance(d, dict):
+            return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
+        elif isinstance(d, list):
+            return [dict_to_obj(item) for item in d]
+        else:
+            return d
+    
+    return dict_to_obj(config_dict)
+
+creds = load_config('creds.json')
 
 
 class StockSelector:
     def __init__(self, csv_path='companies_by_marketcap.csv'):
         self.csv_path = csv_path
-        self.market_cap_filter = creds.STOCK_SELECTION['market_cap_min']
+        self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
         self.client = SchwabBroker()
         self.batch_size = 50
 
@@ -36,7 +56,7 @@ class StockSelector:
                     price = q.get("mark") or q.get("lastPrice")
                     volume = q.get("totalVolume")
 
-                    if price and price >= creds.STOCK_SELECTION['price_min'] and volume and volume >= creds.STOCK_SELECTION['volume_min']:
+                    if price and price >= creds.STOCK_SELECTION.price_min and volume and volume >= creds.STOCK_SELECTION.volume_min:
                         self.filtered.append({
                             "symbol": symbol,
                             "price": price,
@@ -68,7 +88,7 @@ class StockSelector:
                     "alpha_5d": alpha_5d
                 })
 
-                if alpha_5d > creds.STOCK_SELECTION['alpha_threshold']:
+                if alpha_5d > creds.STOCK_SELECTION.alpha_threshold:
                     self.qualified.append(stock)
                     self.sector_returns[sector].append(alpha_5d)
             except Exception as e:

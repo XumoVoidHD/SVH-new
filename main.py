@@ -11,7 +11,6 @@ from helpers import vwap, ema, macd, adx, atr
 from log import setup_logger
 from db.trades_db import trades_db
 from fetch_marketcap_csv import fetch_marketcap_csv
-from deldb import rename_to_creation_date
 import json
 from types import SimpleNamespace
 setup_logger()
@@ -26,12 +25,13 @@ def load_config(json_file='creds.json'):
         if isinstance(d, dict):
             return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
         elif isinstance(d, list):
-            return [dict_to_obj(item) for item in d]
+            # Keep lists as lists, but convert their items if they're dicts
+            return [dict_to_obj(item) if isinstance(item, dict) else item for item in d]
         else:
             return d
     
     return dict_to_obj(config_dict)
-    
+
 creds = load_config('creds.json')
 print(creds)
 TESTING = creds.TESTING
@@ -46,7 +46,7 @@ class Strategy:
         self.score = 0
         self.additional_checks_passed = False
         
-        # Load configurations from creds.py
+        # Load configurations from creds.json
         self.indicators_config = creds.INDICATORS
         self.alpha_score_config = creds.ALPHA_SCORE_CONFIG
         self.additional_checks_config = creds.ADDITIONAL_CHECKS_CONFIG
@@ -76,7 +76,7 @@ class Strategy:
         # Hedge and leverage tracking
         self.hedge_active = False
         self.hedge_shares = 0
-        self.hedge_symbol = self.hedge_config['hedge_symbol']
+        self.hedge_symbol = self.hedge_config.hedge_symbol
         self.current_leverage = 1.0
         self.margin_used_leverage = 0
 
@@ -90,15 +90,15 @@ class Strategy:
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
         # Get current time in USA Eastern Time
-        eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+        eastern_tz = pytz.timezone(self.trading_hours.timezone)
         current_time = datetime.now(eastern_tz)
         current_time_str = current_time.strftime("%H:%M")
         
         # Get entry windows from configuration
-        morning_start = self.trading_hours['morning_entry_start']
-        morning_end = self.trading_hours['morning_entry_end']
-        afternoon_start = self.trading_hours['afternoon_entry_start']
-        afternoon_end = self.trading_hours['afternoon_entry_end']
+        morning_start = self.trading_hours.morning_entry_start
+        morning_end = self.trading_hours.morning_entry_end
+        afternoon_start = self.trading_hours.afternoon_entry_start
+        afternoon_end = self.trading_hours.afternoon_entry_end
         
         # Check if current time is in either window
         in_morning_window = morning_start <= current_time_str <= morning_end
@@ -108,16 +108,16 @@ class Strategy:
     
     def get_next_entry_window(self):
         """Get information about the next entry window"""
-        eastern_tz = pytz.timezone(self.trading_hours['timezone'])
+        eastern_tz = pytz.timezone(self.trading_hours.timezone)
         current_time = datetime.now(eastern_tz)
         current_time_str = current_time.strftime("%H:%M")
         
         # Get entry windows from configuration
-        morning_start = self.trading_hours['morning_entry_start']
-        morning_end = self.trading_hours['morning_entry_end']
-        afternoon_start = self.trading_hours['afternoon_entry_start']
-        afternoon_end = self.trading_hours['afternoon_entry_end']
-        market_close = self.trading_hours['market_close']
+        morning_start = self.trading_hours.morning_entry_start
+        morning_end = self.trading_hours.morning_entry_end
+        afternoon_start = self.trading_hours.afternoon_entry_start
+        afternoon_end = self.trading_hours.afternoon_entry_end
+        market_close = self.trading_hours.market_close
         
         if current_time_str < morning_start:
             return f"Next entry window: {morning_start}-{morning_end}"
@@ -134,7 +134,7 @@ class Strategy:
     
     def check_hedge_triggers(self):
         """Check if hedge triggers are met and return hedge level"""
-        if not self.hedge_config['enabled']:
+        if not self.hedge_config.enabled:
             return None, 0
         
         triggers_met = 0
@@ -145,9 +145,9 @@ class Strategy:
             vix_data = self.broker.get_historical_data(3, "VIXY")
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
-                if current_vix > self.hedge_config['triggers']['vix_threshold']:
+                if current_vix > self.hedge_config.triggers.vix_threshold:
                     triggers_met += 1
-                    trigger_details.append(f"VIX {current_vix:.1f} > {self.hedge_config['triggers']['vix_threshold']}")
+                    trigger_details.append(f"VIX {current_vix:.1f} > {self.hedge_config.triggers.vix_threshold}")
             else:
                 print(f"VIX data unavailable or empty for hedge trigger check")
             
@@ -158,9 +158,9 @@ class Strategy:
                 price_15min_ago = spy_data['close'].iloc[-2]
                 drop_pct = (price_15min_ago - current_price) / price_15min_ago
                 
-                if drop_pct > self.hedge_config['triggers']['sp500_drop_threshold']:
+                if drop_pct > self.hedge_config.triggers.sp500_drop_threshold:
                     triggers_met += 1
-                    trigger_details.append(f"S&P drop {drop_pct*100:.1f}% > {self.hedge_config['triggers']['sp500_drop_threshold']*100:.1f}%")
+                    trigger_details.append(f"S&P drop {drop_pct*100:.1f}% > {self.hedge_config.triggers.sp500_drop_threshold*100:.1f}%")
             else:
                 print(f"SPY data unavailable or insufficient for hedge trigger check")
             
@@ -175,10 +175,10 @@ class Strategy:
             return None, 0
         elif triggers_met == 1:
             hedge_level = 'mild'
-            beta = self.hedge_config['hedge_levels']['mild']['beta']
+            beta = self.hedge_config.hedge_levels.mild.beta
         else:
             hedge_level = 'severe' 
-            beta = self.hedge_config['hedge_levels']['severe']['beta']
+            beta = self.hedge_config.hedge_levels.severe.beta
         
         print(f"Hedge triggers: {triggers_met} met - {', '.join(trigger_details)}")
         print(f"Hedge level: {hedge_level} (-{beta}β)")
@@ -187,7 +187,7 @@ class Strategy:
     
     def check_leverage_conditions(self):
         """Check if leverage conditions are met and return leverage multiplier"""
-        if not self.leverage_config['enabled']:
+        if not self.leverage_config.enabled:
             return 1.0
         
         conditions_met = 0
@@ -196,23 +196,23 @@ class Strategy:
         
         try:
             # Check Alpha Score condition
-            if self.score >= self.leverage_config['conditions']['alpha_score_min']:
+            if self.score >= self.leverage_config.conditions.alpha_score_min:
                 conditions_met += 1
-                condition_details.append(f"Alpha Score {self.score} ≥ {self.leverage_config['conditions']['alpha_score_min']}")
+                condition_details.append(f"Alpha Score {self.score} ≥ {self.leverage_config.conditions.alpha_score_min}")
             
             # Check VIX condition
             vix_data = self.broker.get_historical_data(3, "VIXY")
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
-                if current_vix < self.leverage_config['conditions']['vix_max']:
+                if current_vix < self.leverage_config.conditions.vix_max:
                     conditions_met += 1
-                    condition_details.append(f"VIX {current_vix:.1f} < {self.leverage_config['conditions']['vix_max']}")
+                    condition_details.append(f"VIX {current_vix:.1f} < {self.leverage_config.conditions.vix_max}")
                 
                 # Check VIX trend (10-day declining)
-                if len(vix_data) >= self.leverage_config['conditions']['vix_trend_days']:
-                    vix_10d_ago = vix_data['close'].iloc[-self.leverage_config['conditions']['vix_trend_days']]
+                if len(vix_data) >= self.leverage_config.conditions.vix_trend_days:
+                    vix_10d_ago = vix_data['close'].iloc[-self.leverage_config.conditions.vix_trend_days]
                     if current_vix < vix_10d_ago:
-                        condition_details.append(f"VIX trending down over {self.leverage_config['conditions']['vix_trend_days']} days")
+                        condition_details.append(f"VIX trending down over {self.leverage_config.conditions.vix_trend_days} days")
             else:
                 print(f"VIX data unavailable or empty for leverage condition check")
              
@@ -226,13 +226,13 @@ class Strategy:
         conditions_pct = conditions_met / total_conditions
         
         if conditions_pct >= 1.0:  # All conditions met
-            leverage = self.leverage_config['leverage_levels']['all_conditions_met']
+            leverage = self.leverage_config.leverage_levels.all_conditions_met
             print(f"Leverage: All conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
         elif conditions_pct >= 0.6:  # Most conditions met
-            leverage = self.leverage_config['leverage_levels']['partial_conditions'] 
+            leverage = self.leverage_config.leverage_levels.partial_conditions 
             print(f"Leverage: Partial conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
         else:
-            leverage = self.leverage_config['leverage_levels']['default']
+            leverage = self.leverage_config.leverage_levels.default
             print(f"Leverage: Few conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
         
         if condition_details:
@@ -382,8 +382,18 @@ class Strategy:
         """Fetch and store data for each configured timeframe with retry logic"""
         # Get all unique timeframes from indicator configurations
         timeframes_needed = set()
-        for indicator_name, indicator_config in self.indicators_config.items():
-            timeframes_needed.update(indicator_config['timeframes'])
+        
+        # Convert SimpleNamespace to dict-like iteration
+        indicators_dict = vars(self.indicators_config)
+        for indicator_name, indicator_config in indicators_dict.items():
+            if hasattr(indicator_config, 'timeframes'):
+                timeframes = indicator_config.timeframes
+                if isinstance(timeframes, list):
+                    timeframes_needed.update(timeframes)
+                else:
+                    print(f"Warning: timeframes is not a list for {indicator_name}: {type(timeframes)}")
+            else:
+                print(f"Warning: indicator_config {indicator_name} has no timeframes attribute")
         
         # Fetch data for each needed timeframe
         for tf_name in timeframes_needed:
@@ -413,17 +423,18 @@ class Strategy:
     def calculate_indicators_by_timeframe(self):
         """Calculate indicators for each timeframe separately"""
         # Initialize indicators storage by timeframe
-        for tf_name in self.data.keys():
+        for tf_name in list(self.data.keys()):
             self.indicators[tf_name] = {}
         
         # Calculate each indicator on its specified timeframes
-        for indicator_name, indicator_config in self.indicators_config.items():
-            for tf_name in indicator_config['timeframes']:
+        indicators_dict = vars(self.indicators_config)
+        for indicator_name, indicator_config in indicators_dict.items():
+            for tf_name in indicator_config.timeframes:
                 if tf_name not in self.data or self.data[tf_name].empty:
                     continue
                 
                 data = self.data[tf_name]
-                params = indicator_config['params']
+                params = indicator_config.params
                 
                 # Calculate indicator based on type
                 if indicator_name == 'vwap':
@@ -432,28 +443,28 @@ class Strategy:
                 elif indicator_name == 'macd':
                     self.indicators[tf_name]['macd'] = macd.calc_macd(
                         data, 
-                        fast=params.get('fast', 12),
-                        slow=params.get('slow', 26),
-                        signal=params.get('signal', 9)
+                        fast=getattr(params, 'fast', 12),
+                        slow=getattr(params, 'slow', 26),
+                        signal=getattr(params, 'signal', 9)
                     )
                 
                 elif indicator_name == 'adx':
                     self.indicators[tf_name]['adx'] = adx.calc_adx(
                         data, 
-                        length=params.get('length', 14)
+                        length=getattr(params, 'length', 14)
                     )
                 
                 elif indicator_name == 'ema1':
-                    ema_length = params.get('length', 5)
+                    ema_length = getattr(params, 'length', 5)
                     self.indicators[tf_name]['ema1'] = ema.calc_ema(data, length=ema_length)
                 
                 elif indicator_name == 'ema2':
-                    ema_length = params.get('length', 20)
+                    ema_length = getattr(params, 'length', 20)
                     self.indicators[tf_name]['ema2'] = ema.calc_ema(data, length=ema_length)
                 
                 elif indicator_name == 'volume_avg':
                     self.indicators[tf_name]['volume_avg'] = data['volume'].rolling(
-                        window=params.get('window', 20)
+                        window=getattr(params, 'window', 20)
                     ).mean()
                 
                 print(f"Calculated {indicator_name} for {tf_name}")
@@ -482,27 +493,27 @@ class Strategy:
         
         # Trend analysis (30%)
         if self._check_trend_conditions():
-            self.score += self.alpha_score_config['trend']['weight']
-            print(f"Score +{self.alpha_score_config['trend']['weight']} (Trend conditions met)")
+            self.score += self.alpha_score_config.trend.weight
+            print(f"Score +{self.alpha_score_config.trend.weight} (Trend conditions met)")
         
         # Momentum analysis (20%)
         if self._check_momentum_conditions():
-            self.score += self.alpha_score_config['momentum']['weight']
-            print(f"Score +{self.alpha_score_config['momentum']['weight']} (Momentum conditions met)")
+            self.score += self.alpha_score_config.momentum.weight
+            print(f"Score +{self.alpha_score_config.momentum.weight} (Momentum conditions met)")
         
         # Volume/Volatility analysis (20%)
         if self._check_volume_volatility_conditions():
-            self.score += self.alpha_score_config['volume_volatility']['weight']
-            print(f"Score +{self.alpha_score_config['volume_volatility']['weight']} (Volume/Volatility conditions met)")
+            self.score += self.alpha_score_config.volume_volatility.weight
+            print(f"Score +{self.alpha_score_config.volume_volatility.weight} (Volume/Volatility conditions met)")
         
         # News analysis (15%) - placeholder
-        self.score += self.alpha_score_config['news']['weight']
-        print(f"Score +{self.alpha_score_config['news']['weight']} (News check - placeholder)")
+        self.score += self.alpha_score_config.news.weight
+        print(f"Score +{self.alpha_score_config.news.weight} (News check - placeholder)")
         
         # Market Calm analysis (15%)
         if self._check_market_calm_conditions():
-            self.score += self.alpha_score_config['market_calm']['weight']
-            print(f"Score +{self.alpha_score_config['market_calm']['weight']} (Market Calm conditions met)")
+            self.score += self.alpha_score_config.market_calm.weight
+            print(f"Score +{self.alpha_score_config.market_calm.weight} (Market Calm conditions met)")
         
         print(f"\nFinal Alpha Score: {self.score}")
         
@@ -541,11 +552,11 @@ class Strategy:
         # Volume spike check
         recent_volume = self.data['3min']['volume'].iloc[-1]
         avg_volume = self.indicators['3min']['volume_avg'].iloc[-1]
-        multiplier = self.alpha_score_config['volume_volatility']['conditions']['volume_spike']['multiplier']
+        multiplier = self.alpha_score_config.volume_volatility.conditions.volume_spike.multiplier
         volume_ok = recent_volume > multiplier * avg_volume
         
         # ADX threshold check
-        adx_threshold = self.alpha_score_config['volume_volatility']['conditions']['adx_threshold']['threshold']
+        adx_threshold = self.alpha_score_config.volume_volatility.conditions.adx_threshold.threshold
         adx_ok = self.indicators['3min']['adx'].iloc[-1] > adx_threshold
         
         return volume_ok and adx_ok
@@ -558,7 +569,7 @@ class Strategy:
                 return False
             
             vix_close = vix_df['close']
-            vix_threshold = self.alpha_score_config['market_calm']['conditions']['vix_threshold']['threshold']
+            vix_threshold = self.alpha_score_config.market_calm.conditions.vix_threshold.threshold
             
             # VIX < threshold and dropping
             vix_low = vix_close.iloc[-1] < vix_threshold
@@ -570,7 +581,7 @@ class Strategy:
     
     def perform_additional_checks(self):
         """Perform additional checks after Alpha Score calculation"""
-        if self.score < creds.RISK_CONFIG['alpha_score_threshold']:
+        if self.score < creds.RISK_CONFIG.alpha_score_threshold:
             self.additional_checks_passed = False
             return
         
@@ -581,7 +592,7 @@ class Strategy:
         # Check +2x volume
         recent_volume = self.data['3min']['volume'].iloc[-1]
         avg_volume = self.indicators['3min']['volume_avg'].iloc[-1]
-        volume_multiplier = self.additional_checks_config['volume_multiplier']
+        volume_multiplier = self.additional_checks_config.volume_multiplier
         
         volume_check = recent_volume > volume_multiplier * avg_volume
         print(f"{'Passed' if volume_check else 'Failed'} +{volume_multiplier}x volume check {'passed' if volume_check else 'failed'}")
@@ -605,9 +616,9 @@ class Strategy:
         
         current_vwap = vwap_series.iloc[-1]
         vwap_3min_ago = vwap_series.iloc[-2]
-        vwap_slope = (current_vwap - vwap_3min_ago) / self.additional_checks_config['vwap_slope_period']
+        vwap_slope = (current_vwap - vwap_3min_ago) / self.additional_checks_config.vwap_slope_period
         
-        threshold = self.additional_checks_config['vwap_slope_threshold']
+        threshold = self.additional_checks_config.vwap_slope_threshold
         slope_ok = vwap_slope > threshold
         
         print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
@@ -634,7 +645,7 @@ class Strategy:
         current_price = self.broker.get_current_price(self.stock)
         
         # Each stock gets exactly risk_per_trade percentage of equity
-        risk_per_trade = creds.RISK_CONFIG['risk_per_trade']
+        risk_per_trade = creds.RISK_CONFIG.risk_per_trade
         
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
@@ -671,7 +682,7 @@ class Strategy:
             if not creds.VWAP_SHOULD_BE_BELOW_PRICE:
                 vwap_value = current_price
         
-        offset_pct = random.uniform(creds.ORDER_CONFIG['limit_offset_min'], creds.ORDER_CONFIG['limit_offset_max'])  # 0.03% to 0.07%
+        offset_pct = random.uniform(creds.ORDER_CONFIG.limit_offset_min, creds.ORDER_CONFIG.limit_offset_max)  # 0.03% to 0.07%
         limit_price = vwap_value * (1 + offset_pct)  # Slightly above VWAP for buy orders
         
         print(f"Position Size: {shares} shares")
@@ -690,17 +701,17 @@ class Strategy:
     def calculate_stop_loss(self, current_price):
         """Calculate stop loss percentage based on volatility"""
         data_3min = self.broker.get_historical_data(3, self.stock)
-        atr14 = atr.calc_atr(data_3min, creds.STOP_LOSS_CONFIG['atr_period'])
+        atr14 = atr.calc_atr(data_3min, creds.STOP_LOSS_CONFIG.atr_period)
         atr14 = atr14.iloc[-1]
 
-        base_stop = creds.STOP_LOSS_CONFIG['default_stop_loss']
+        base_stop = creds.STOP_LOSS_CONFIG.default_stop_loss
         
-        atr_stop = (atr14 * creds.STOP_LOSS_CONFIG['atr_multiplier']) / current_price
+        atr_stop = (atr14 * creds.STOP_LOSS_CONFIG.atr_multiplier) / current_price
         print(f"ATR Stop: {atr_stop:.3f}")
         
         stop_loss = max(base_stop, atr_stop)
         
-        stop_loss = min(stop_loss, creds.STOP_LOSS_CONFIG['max_stop_loss'])
+        stop_loss = min(stop_loss, creds.STOP_LOSS_CONFIG.max_stop_loss)
         
         return stop_loss
 
@@ -709,10 +720,10 @@ class Strategy:
         print(f"Additional Checks Passed: {self.additional_checks_passed}")
         
         # Both conditions must be met to place an order
-        # if self.score >= creds.RISK_CONFIG['alpha_score_threshold']: 
+        # if self.score >= creds.RISK_CONFIG.alpha_score_threshold: 
             # Use this condition for now for all orders to get executed 
-        if self.score >= creds.RISK_CONFIG['alpha_score_threshold'] and bool(self.additional_checks_passed):
-            print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG['alpha_score_threshold']} AND additional checks passed")
+        if self.score >= creds.RISK_CONFIG.alpha_score_threshold and bool(self.additional_checks_passed):
+            print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG.alpha_score_threshold} AND additional checks passed")
             shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
             if shares > 0:
                 print(f"Order Details:")
@@ -725,7 +736,7 @@ class Strategy:
                 # Get current time in USA Central Time
                 central_tz = pytz.timezone('America/Chicago')
                 curr_time = datetime.now(central_tz)
-                target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG['order_window'])
+                target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG.order_window)
                 
                 while curr_time < target_time:
                     self.current_price = self.broker.get_current_price(self.stock)
@@ -747,13 +758,13 @@ class Strategy:
                         # Initialize position tracking variables
                         self.entry_price = limit_price
                         self.stop_loss_price = stop_loss
-                        self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG['profit_booking_levels'][0]['gain'])  # Use 1% from profit booking levels
+                        self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0].gain)  # Use 1% from profit booking levels
                         self.position_shares = shares
                         self.position_active = True
                         
                         # Reset profit booking and trailing stop levels for new position
-                        self.profit_booking_levels_remaining = creds.PROFIT_CONFIG['profit_booking_levels'].copy()
-                        self.trailing_stop_levels_remaining = creds.STOP_LOSS_CONFIG['trailing_stop_levels'].copy()
+                        self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
+                        self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
                         print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
                         # Get current time in USA Central Time
                         central_tz = pytz.timezone('America/Chicago')
@@ -792,8 +803,8 @@ class Strategy:
                     return -1
                 
         else:
-            if self.score < creds.RISK_CONFIG['alpha_score_threshold']:
-                print(f"Alpha Score too low: {self.score} < {creds.RISK_CONFIG['alpha_score_threshold']}")
+            if self.score < creds.RISK_CONFIG.alpha_score_threshold:
+                print(f"Alpha Score too low: {self.score} < {creds.RISK_CONFIG.alpha_score_threshold}")
             if not bool(self.additional_checks_passed):
                 print("Additional checks failed")
         return -1
@@ -801,7 +812,7 @@ class Strategy:
     def run(self, i):
         while True:
             # Check for end-of-day exit times
-            central_tz = pytz.timezone(self.trading_hours['timezone'])
+            central_tz = pytz.timezone(self.trading_hours.timezone)
             current_time = datetime.now(central_tz)
             current_time_str = current_time.strftime("%H:%M")
             
@@ -814,7 +825,7 @@ class Strategy:
                 self.safety_exit_all()
             
             # # 4:00 PM - Market-on-close for any remaining positions
-            # elif current_time_str >= self.trading_hours['market_close']:
+            # elif current_time_str >= self.trading_hours.market_close:
             #     self.market_on_close_exit()
             #     break  # End trading for the day
 
@@ -905,10 +916,10 @@ class Strategy:
         self._check_trailing_stops(current_gain_pct, self.current_price)
 
         # Trailing Exit Logic using PROFIT_CONFIG
-        trailing_conditions = creds.PROFIT_CONFIG['trailing_exit_conditions']
-        gain_threshold = trailing_conditions['gain_threshold']
-        drop_threshold = trailing_conditions['drop_threshold']
-        monitor_period = trailing_conditions['monitor_period']
+        trailing_conditions = creds.PROFIT_CONFIG.trailing_exit_conditions
+        gain_threshold = trailing_conditions.gain_threshold
+        drop_threshold = trailing_conditions.drop_threshold
+        monitor_period = trailing_conditions.monitor_period
         
         if current_gain_pct >= gain_threshold:
             # Start monitoring if not already started
@@ -1084,7 +1095,7 @@ class Strategy:
         """Check profit booking levels"""
         # Create a local copy of profit booking levels to avoid modifying the global config
         if not hasattr(self, 'profit_booking_levels_remaining'):
-            self.profit_booking_levels_remaining = creds.PROFIT_CONFIG['profit_booking_levels'].copy()
+            self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
             levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.profit_booking_levels_remaining])
             print(f"[{self.stock}] Profit booking levels initialized: {levels_str}")
         
@@ -1116,7 +1127,7 @@ class Strategy:
         """Check trailing stop levels"""
         # Create a local copy of trailing stop levels to avoid modifying the global config
         if not hasattr(self, 'trailing_stop_levels_remaining'):
-            self.trailing_stop_levels_remaining = creds.STOP_LOSS_CONFIG['trailing_stop_levels'].copy()
+            self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
             levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.trailing_stop_levels_remaining])
             print(f"[{self.stock}] Trailing stop levels initialized: {levels_str}")
         
@@ -1145,9 +1156,9 @@ class Strategy:
     
     def _check_trailing_exit(self, current_gain_pct, current_price):
         """Check trailing exit conditions after 5% gain"""
-        exit_config = creds.PROFIT_CONFIG['trailing_exit_conditions']
+        exit_config = creds.PROFIT_CONFIG.trailing_exit_conditions
         
-        if current_gain_pct >= exit_config['gain_threshold']:
+        if current_gain_pct >= exit_config.gain_threshold:
             # Check if we should exit based on price drop
             # Get current time in USA Central Time
             central_tz = pytz.timezone('America/Chicago')
@@ -1162,9 +1173,9 @@ class Strategy:
             # Get current time in USA Central Time for calculation
             central_tz = pytz.timezone('America/Chicago')
             time_since_trailing = datetime.now(central_tz) - self.trailing_start_time
-            if time_since_trailing.total_seconds() <= exit_config['monitor_period'] * 60:
+            if time_since_trailing.total_seconds() <= exit_config.monitor_period * 60:
                 price_drop = (self.max_price_since_trailing - current_price) / self.max_price_since_trailing
-                if price_drop >= exit_config['drop_threshold']:
+                if price_drop >= exit_config.drop_threshold:
                     # Exit entire position
                     self.close_position('trailing_exit')
                     print(f"TRAILING EXIT: {self.stock} - Exited due to {price_drop*100:.1f}% drop from peak")
@@ -1476,7 +1487,7 @@ class StrategyManager:
         # self.stocks_list = ["AAPL", "MSFT", "NVDA"]
         
         # Add XLF to database for hedging - all threads can use it
-        hedge_symbol = self.config.HEDGE_CONFIG['hedge_symbol']
+        hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
         print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
         trades_db.add_stocks_from_list([hedge_symbol])
         
@@ -1503,7 +1514,7 @@ class StrategyManager:
     
     def monitor_drawdown_loop(self):
             print("Starting global drawdown monitoring thread.")
-            threshold = creds.EQUITY * creds.RISK_CONFIG['daily_drawdown_limit']
+            threshold = creds.EQUITY * creds.RISK_CONFIG.daily_drawdown_limit
             self.max_drawdown_triggered = False  # Initialize the attribute
             
             while not self.stop_event.is_set():
@@ -1521,7 +1532,7 @@ class StrategyManager:
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
                         
-                    if current_time_str >= self.config.TRADING_HOURS['market_close']:
+                    if current_time_str >= self.config.TRADING_HOURS.market_close:
                         print(f"Exit time reached at {current_time_str} CT")
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
@@ -1569,11 +1580,11 @@ class StrategyManager:
         broker_summary = self.broker.get_broker_summary()
         
         print(f"\n=== BROKER SUMMARY ===")
-        print(f"Cash: ${broker_summary['cash']:.2f}")
-        print(f"Equity: ${broker_summary['equity']:.2f}")
-        print(f"Margin Used: ${broker_summary['margin_used']:.2f}")
-        print(f"Free Margin: ${broker_summary['free_margin']:.2f}")
-        print(f"Total PnL: ${broker_summary['total_pnl']:.2f}")
+        print(f"Cash: ${broker_summary.cash:.2f}")
+        print(f"Equity: ${broker_summary.equity:.2f}")
+        print(f"Margin Used: ${broker_summary.margin_used:.2f}")
+        print(f"Free Margin: ${broker_summary.free_margin:.2f}")
+        print(f"Total PnL: ${broker_summary.total_pnl:.2f}")
         
         # Print open positions
         positions = self.broker.get_positions()
@@ -1624,8 +1635,6 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
-    # x = rename_to_creation_date()
-    # print(x)
     fetch_marketcap_csv()
     manager = StrategyManager()
     manager.run()

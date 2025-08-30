@@ -6,6 +6,7 @@ import pytz
 import json
 import os
 from streamlit_autorefresh import st_autorefresh
+from deldb import rename_to_creation_date
 
 # Page configuration
 st.set_page_config(
@@ -112,11 +113,47 @@ def main():
         st.header("🗄️ Database Viewer")
         
         # Database management buttons
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             if st.button("🔄 Refresh Data", type="primary"):
                 st.rerun()
+        
+        with col2:
+            if st.button("🚀 Start Trading System", type="primary", help="Run main.py to start the trading system"):
+                try:
+                    import subprocess
+                    import sys
+                    import os
+                    
+                    # Get the current directory
+                    current_dir = os.getcwd()
+                    main_py_path = os.path.join(current_dir, "main.py")
+                    
+                    if os.path.exists(main_py_path):
+                        # Open main.py in a new terminal window/process
+                        if os.name == 'nt':  # Windows
+                            # Use a simpler approach for Windows to avoid path issues
+                            subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
+                                           shell=True, cwd=current_dir)
+                        else:  # Linux/Mac
+                            subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
+                                           cwd=current_dir)
+                        
+                    else:
+                        st.error("❌ main.py not found!")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        with col3:
+            if st.button("🗑️ Clear Database", type="secondary", help="Clear the database by calling rename_to_creation_date function"):
+                try:
+                    # Call the rename_to_creation_date function
+                    result = rename_to_creation_date()
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
         
         # Connect to database
         conn = get_db_connection()

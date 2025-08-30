@@ -3,7 +3,7 @@
     "TESTING": true,
     "VWAP_SHOULD_BE_BELOW_PRICE": true,
     "STOCK_SELECTION": {
-        "market_cap_min": 2000000000,
+        "market_cap_min": 2000000000000,
         "price_min": 10.0,
         "volume_min": 1000000,
         "alpha_threshold": 0.005,
