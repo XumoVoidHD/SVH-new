@@ -1,4 +1,3 @@
-import creds
 import pandas as pd
 from stock_selector import StockSelector
 from simulation.schwab_broker import SchwabBroker
@@ -13,8 +12,28 @@ from log import setup_logger
 from db.trades_db import trades_db
 from fetch_marketcap_csv import fetch_marketcap_csv
 from deldb import rename_to_creation_date
+import json
+from types import SimpleNamespace
 setup_logger()
 
+def load_config(json_file='creds.json'):
+    """Load configuration from JSON file and make it accessible like a module"""
+    with open(json_file, 'r') as f:
+        config_dict = json.load(f)
+    
+    # Convert dict to object with dot notation access
+    def dict_to_obj(d):
+        if isinstance(d, dict):
+            return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
+        elif isinstance(d, list):
+            return [dict_to_obj(item) for item in d]
+        else:
+            return d
+    
+    return dict_to_obj(config_dict)
+    
+creds = load_config('creds.json')
+print(creds)
 TESTING = creds.TESTING
 
 class Strategy:

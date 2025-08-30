@@ -20,7 +20,7 @@ st.write("**🧪 Testing Configuration**")
 if hasattr(creds, 'TESTING'):
     testing_enabled = st.checkbox(
         "Testing Mode Enabled", 
-        value=creds.TESTING,
+                    value=creds.TESTING,
         key="testing_enabled",
         help="Enable/disable testing mode for the trading system"
     )
@@ -218,12 +218,11 @@ def main():
             st.subheader("🎯 Stock Selection Configuration")
             st.markdown("Configure stock filtering criteria for the trading system")
             
-            if hasattr(creds, 'STOCK_SELECTION'):
-                stock_config = creds.STOCK_SELECTION
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
+            stock_config = creds.STOCK_SELECTION
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
                     st.write("**Market Cap Filter**")
                     market_cap_min = st.number_input(
                         "Minimum Market Cap ($):", 
@@ -254,51 +253,50 @@ def main():
                         help="Minimum daily trading volume"
                     )
                 
-                with col2:
-                    st.write("**Alpha Threshold**")
-                    alpha_threshold = st.number_input(
-                        "5-Day Alpha Threshold:", 
-                        min_value=0.00001, 
-                        max_value=0.01, 
-                        value=stock_config.get('alpha_threshold', 0.005), 
-                        step=0.0001,
-                        format="%.3f",
-                        help="Minimum 5-day alpha return to qualify (as decimal, e.g., 0.005 = 0.5%)",
-                    )
-                    
-                    st.write("**Sector Allocation**")
-                    max_sector_weight = st.number_input(
-                        "Maximum Sector Weight (%):", 
-                        min_value=10.0, 
-                        max_value=100.0, 
-                        value=stock_config.get('max_sector_weight', 30.0), 
-                        step=5.0,
-                        help="Maximum allocation per sector"
-                    )
-                    
-                    top_sectors_count = st.number_input(
-                        "Top Sectors Count:", 
-                        min_value=1, 
-                        max_value=10, 
-                        value=stock_config.get('top_sectors_count', 3), 
-                        step=1,
-                        help="Number of top sectors to focus on"
-                    )
+            with col2:
+                st.write("**Alpha Threshold**")
+                alpha_threshold = st.number_input(
+                    "5-Day Alpha Threshold:", 
+                    min_value=0.00001, 
+                    max_value=0.01, 
+                    value=stock_config.get('alpha_threshold', 0.005), 
+                    step=0.0001,
+                    format="%.3f",
+                    help="Minimum 5-day alpha return to qualify (as decimal, e.g., 0.005 = 0.5%)",
+                )
+                
+                st.write("**Sector Allocation**")
+                max_sector_weight = st.number_input(
+                    "Maximum Sector Weight (%):", 
+                    min_value=10.0, 
+                    max_value=100.0, 
+                    value=stock_config.get('max_sector_weight', 30.0), 
+                    step=1.0,
+                    help="Maximum allocation per sector"
+                )
+                
+                top_sectors_count = st.number_input(
+                    "Top Sectors Count:", 
+                    min_value=1, 
+                    max_value=10, 
+                    value=stock_config.get('top_sectors_count', 3), 
+                    step=1,
+                    help="Number of top sectors to focus on"
+                )
         
         with tab2:
             st.subheader("📊 Indicators Configuration")
             
-            if hasattr(creds, 'INDICATORS') and hasattr(creds, 'ADDITIONAL_CHECKS_CONFIG'):
-                indicators_config = creds.INDICATORS
-                checks_config = creds.ADDITIONAL_CHECKS_CONFIG
-                
-                # VWAP Settings - Compact layout
+            indicators_config = creds.INDICATORS
+            checks_config = creds.ADDITIONAL_CHECKS_CONFIG
+            
+            # VWAP Settings - Compact layout
             st.write("**VWAP Settings**")
             vwap_timeframes = st.multiselect(
-                    "Timeframes:", 
+                "Timeframes:", 
                 ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('vwap', {}).get('timeframes', ["3min"]),
-                    key="vwap_timeframes"
+                default=indicators_config.get('vwap', {}).get('timeframes', ["3min"]),
+                key="vwap_timeframes"
             )
             
             # EMA Settings - Compact layout
@@ -312,9 +310,9 @@ def main():
                     value=indicators_config.get('ema1', {}).get('params', {}).get('length', 5), 
                     key="ema1_length"
                 )
-            ema1_timeframes = st.multiselect(
-                "EMA1 Timeframes:", 
-                ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                ema1_timeframes = st.multiselect(
+                    "EMA1 Timeframes:", 
+                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
                     default=indicators_config.get('ema1', {}).get('timeframes', ["5min"]),
                     key="ema1_timeframes"
                 )
@@ -326,12 +324,12 @@ def main():
                     value=indicators_config.get('ema2', {}).get('params', {}).get('length', 20), 
                     key="ema2_length"
                 )
-            ema2_timeframes = st.multiselect(
-                "EMA2 Timeframes:", 
-                ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                ema2_timeframes = st.multiselect(
+                    "EMA2 Timeframes:", 
+                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
                     default=indicators_config.get('ema2', {}).get('timeframes', ["20min"]),
                     key="ema2_timeframes"
-            )
+                )
             with col3:
                 st.write("**Current Values:**")
                 st.write(f"EMA1: {ema1_length} periods")
@@ -366,10 +364,10 @@ def main():
                 )
             with col4:
                 macd_timeframes = st.multiselect(
-                        "Timeframes:", 
+                    "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                        default=indicators_config.get('macd', {}).get('timeframes', ["3min"]),
-                        key="macd_timeframes"
+                    default=indicators_config.get('macd', {}).get('timeframes', ["3min"]),
+                    key="macd_timeframes"
                 )
             
             # ADX Settings - Compact layout
@@ -385,10 +383,10 @@ def main():
                 )
             with col2:
                 adx_timeframes = st.multiselect(
-                        "Timeframes:", 
+                    "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                        default=indicators_config.get('adx', {}).get('timeframes', ["3min"]),
-                        key="adx_timeframes"
+                    default=indicators_config.get('adx', {}).get('timeframes', ["3min"]),
+                    key="adx_timeframes"
                 )
             
             # Volume Average Settings - Compact layout
@@ -403,12 +401,12 @@ def main():
                     key="volume_window"
                 )
             with col2:
-                volume_timeframes = st.multiselect(
-                        "Timeframes:", 
+                                volume_timeframes = st.multiselect(
+                    "Timeframes:", 
                     ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                        default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]),
-                        key="volume_timeframes"
-                    )
+                    default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]),
+                    key="volume_timeframes"
+                )
                 
             # Additional Checks Configuration
             st.markdown("---")
@@ -446,7 +444,7 @@ def main():
             st.subheader("🎯 Alpha Score Configuration")
             
             if hasattr(creds, 'ALPHA_SCORE_CONFIG'):
-                alpha_config = creds.ALPHA_SCORE_CONFIG
+                alpha_config = config.get('ALPHA_SCORE_CONFIG', {})
                 
                 # Trend Analysis
                 st.write("**Trend Analysis**")
@@ -545,11 +543,11 @@ def main():
             st.subheader("⚠️ Risk Management Configuration")
             
             if hasattr(creds, 'RISK_CONFIG') and hasattr(creds, 'ORDER_CONFIG'):
-                risk_config = creds.RISK_CONFIG
-                order_config = creds.ORDER_CONFIG
-                
-                # Risk Configuration
-                st.write("**Risk Management**")
+                            risk_config = config.get('RISK_CONFIG', {})
+            order_config = config.get('ORDER_CONFIG', {})
+            
+            # Risk Configuration
+            st.write("**Risk Management**")
             col1, col2 = st.columns(2)
             with col1:
                 alpha_threshold = st.number_input(
@@ -647,8 +645,8 @@ def main():
             st.subheader("🛑 Stop Loss & Profit Configuration")
             
             if hasattr(creds, 'STOP_LOSS_CONFIG') and hasattr(creds, 'PROFIT_CONFIG'):
-                stop_loss_config = creds.STOP_LOSS_CONFIG
-                profit_config = creds.PROFIT_CONFIG
+                stop_loss_config = config.get('STOP_LOSS_CONFIG', {})
+                profit_config = config.get('PROFIT_CONFIG', {})
                 
                 # Stop Loss Configuration
                 st.write("**Stop Loss Settings**")
