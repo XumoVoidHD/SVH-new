@@ -70,53 +70,6 @@ def main():
         with col1:
             if st.button("🔄 Refresh Data", type="primary"):
                 st.rerun()
-        
-        with col2:
-            if st.button("🗄️ Initialize Database", type="secondary", help="Create the database table if it doesn't exist"):
-                try:
-                    # Create a simple database connection to trigger table creation
-                    import sqlite3
-                    conn = sqlite3.connect('trades.db')
-                    cursor = conn.cursor()
-                    
-                    # Create the stock_strategies table
-                    cursor.execute('''
-                        CREATE TABLE IF NOT EXISTS stock_strategies (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            symbol TEXT UNIQUE NOT NULL,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            score REAL DEFAULT 0,
-                            additional_checks_passed BOOLEAN DEFAULT FALSE,
-                            position_active BOOLEAN DEFAULT FALSE,
-                            position_shares INTEGER DEFAULT 0,
-                            current_price REAL DEFAULT 0,
-                            entry_price REAL DEFAULT 0,
-                            stop_loss_price REAL DEFAULT 0,
-                            take_profit_price REAL DEFAULT 0,
-                            used_margin REAL DEFAULT 0,
-                            unrealized_pnl REAL DEFAULT 0,
-                            realized_pnl REAL DEFAULT 0,
-                            entry_time TIMESTAMP,
-                            close_time TIMESTAMP,
-                            hedge_active BOOLEAN DEFAULT FALSE,
-                            hedge_shares INTEGER DEFAULT 0,
-                            hedge_symbol TEXT,
-                            hedge_level REAL DEFAULT 0,
-                            hedge_beta REAL DEFAULT 0,
-                            hedge_entry_price REAL DEFAULT 0,
-                            hedge_entry_time TIMESTAMP,
-                            hedge_exit_price REAL DEFAULT 0,
-                            hedge_pnl REAL DEFAULT 0
-                        )
-                    ''')
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ Database table created successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Failed to create database table: {e}")
-        
         # Connect to database
         conn = get_db_connection()
         if not conn:

@@ -1,6 +1,6 @@
 # Market cap filter (now configured in STOCK_SELECTION)
-EQUITY = 200000
-TESTING = FALSE
+EQUITY = 3000000
+TESTING = False
 VWAP_SHOULD_BE_BELOW_PRICE = True
 
 STOCK_SELECTION = {
@@ -191,37 +191,3 @@ TRADING_HOURS = {
     'afternoon_entry_start': '13:30',
     'afternoon_entry_end': '14:30'
 }
-
-# =============================================================================
-# EXAMPLE MODIFICATIONS (uncomment and modify as needed)
-# =============================================================================
-
-# To add RSI indicator on 1-minute timeframe:
-# INDICATORS['rsi'] = {
-#     'timeframes': ['1min'],
-#     'params': {'length': 14}
-# }
-
-# To change MACD parameters:
-# INDICATORS['macd']['params']['fast'] = 8
-# INDICATORS['macd']['params']['slow'] = 21
-
-# To change EMA1 length:
-# INDICATORS['ema1']['params']['length'] = 10
-
-# To change EMA2 length:
-# INDICATORS['ema2']['params']['length'] = 25
-
-# To change Alpha Score threshold:
-# RISK_CONFIG['alpha_score_threshold'] = 80
-
-# To change volume multiplier for additional checks:
-# ADDITIONAL_CHECKS_CONFIG['volume_multiplier'] = 2.5
-
-# To modify risk parameters:
-# RISK_CONFIG['risk_per_trade'] = 0.005  # 0.5% risk per trade
-
-
-# To adjust stop loss parameters:
-# STOP_LOSS_CONFIG['default_stop_loss'] = 0.02  # 2% default stop
-# STOP_LOSS_CONFIG['volatile_stop_loss'] = 0.025  # 2.5% volatile stop
