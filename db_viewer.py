@@ -15,7 +15,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 SVH Trading Dashboard")
+st.title("SVH Trading Dashboard")
 st.markdown("Configuration editor and database viewer for your trading system")
 st.markdown("---")
 
@@ -110,17 +110,17 @@ def main():
     )
     
     if page == "Database Viewer":
-        st.header("🗄️ Database Viewer")
+        st.header("Database Viewer")
         
         # Database management buttons
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("🔄 Refresh Data", type="primary"):
+            if st.button("Refresh Data", type="primary"):
                 st.rerun()
         
         with col2:
-            if st.button("🚀 Start Trading System", type="primary", help="Run main.py to start the trading system"):
+            if st.button("Start", type="primary", help="Run main.py to start the trading system"):
                 try:
                     import subprocess
                     import sys
@@ -147,7 +147,7 @@ def main():
                     st.error(f"❌ Error: {str(e)}")
         
         with col3:
-            if st.button("🗑️ Clear Database", type="secondary", help="Clear the database by calling rename_to_creation_date function"):
+            if st.button("Clear Database", type="secondary", help="Clear the database by calling rename_to_creation_date function"):
                 try:
                     # Call the rename_to_creation_date function
                     result = rename_to_creation_date()
@@ -284,11 +284,11 @@ def main():
             try:
                 st.dataframe(df, use_container_width=True)
             except Exception as e:
-                st.error(f"⚠️ Error displaying DataFrame: {str(e)}")
-                st.info("🔄 Trying alternative display method...")
+                st.error(f"Error displaying DataFrame: {str(e)}")
+                st.info("Trying alternative display method...")
                 
                 # Fallback: display as text with pagination
-                st.subheader("📊 Data Table (Alternative View)")
+                st.subheader("Data Table (Alternative View)")
                 
                 # Show data in chunks to avoid overwhelming the display
                 chunk_size = 20
@@ -330,7 +330,7 @@ def main():
         ])
         
         with tab1:
-            st.subheader("🎯 Stock Selection Configuration")
+            st.subheader("Stock Selection Configuration")
             st.markdown("Configure stock filtering criteria for the trading system")
             
             stock_config = config.get('STOCK_SELECTION', {})
@@ -342,7 +342,7 @@ def main():
                 market_cap_min = st.number_input(
                     "Minimum Market Cap ($):", 
                     min_value=100_000_000, 
-                    max_value=1_000_000_000_000, 
+                    max_value=10_000_000_000_000, 
                     value=stock_config.get('market_cap_min', 2_000_000_000), 
                     step=100_000_000,
                     help="Minimum market capitalization in dollars"
@@ -401,7 +401,7 @@ def main():
                 )
         
         with tab2:
-            st.subheader("📊 Indicators Configuration")
+            st.subheader("Indicators Configuration")
             
             indicators_config = config.get('INDICATORS', {})
             checks_config = config.get('ADDITIONAL_CHECKS_CONFIG', {})
@@ -557,7 +557,7 @@ def main():
                 )
                     
         with tab3:
-            st.subheader("🎯 Alpha Score Configuration")
+            st.subheader("Alpha Score Configuration")
             
             alpha_config = config.get('ALPHA_SCORE_CONFIG', {})
             
@@ -724,13 +724,13 @@ def main():
             # Total weight validation
             total_weight = trend_weight + momentum_weight + volume_weight + news_weight + market_calm_weight
             if total_weight != 100:
-                st.warning(f"⚠️ Total weight is {total_weight}% (should be 100%)")
+                st.warning(f"Total weight is {total_weight}% (should be 100%)")
             else:
-                st.success(f"✅ Total weight: {total_weight}%")
+                st.success(f"Total weight: {total_weight}%")
             
             # Detailed breakdown
             st.markdown("---")
-            st.subheader("📊 Alpha Score Breakdown")
+            st.subheader("Alpha Score Breakdown")
             
             col1, col2 = st.columns(2)
             with col1:
@@ -760,12 +760,12 @@ def main():
                 st.write("---")
                 st.write(f"**Grand Total: {total_weight}%**")
                 if total_weight == 100:
-                    st.success("✅ All conditions properly weighted")
+                    st.success("All conditions properly weighted")
                 else:
-                    st.error(f"❌ Total weight should be 100%, currently {total_weight}%")
+                    st.error(f"Total weight should be 100%, currently {total_weight}%")
         
         with tab4:
-            st.subheader("⚠️ Risk Management Configuration")
+            st.subheader("Risk Management Configuration")
             
             risk_config = config.get('RISK_CONFIG', {})
             order_config = config.get('ORDER_CONFIG', {})
@@ -865,7 +865,7 @@ def main():
                 )
                             
         with tab5:
-            st.subheader("🛑 Stop Loss & Profit Configuration")
+            st.subheader("Stop Loss & Profit Configuration")
             
             stop_loss_config = config.get('STOP_LOSS_CONFIG', {})
             profit_config = config.get('PROFIT_CONFIG', {})
@@ -1063,7 +1063,7 @@ def main():
                 )
      
         with tab6:
-            st.subheader("🛡️ Hedge & Leverage Configuration")
+            st.subheader("Hedge & Leverage Configuration")
             
             hedge_config = config.get('HEDGE_CONFIG', {})
             leverage_config = config.get('LEVERAGE_CONFIG', {})
@@ -1237,8 +1237,8 @@ def main():
                 )
 
         with tab7:
-            st.subheader("⏰ Trading Hours Configuration")
-            st.info("🕐 **Note:** All times are displayed in Central Standard Time (CST)")
+            st.subheader("Trading Hours Configuration")
+            st.info("**Note:** All times are displayed in Central Standard Time (CST)")
             
             trading_hours_config = config.get('TRADING_HOURS', {})
             
@@ -1283,7 +1283,7 @@ def main():
         
         # Global Save Configuration Button
         st.markdown("---")
-        st.subheader("💾 Save All Configuration")
+        st.subheader("Save All Configuration")
         
         # Basic Configuration Section
         st.write("**Basic Configuration**")
@@ -1312,7 +1312,7 @@ def main():
                 key="vwap_below_price_global"
             )
         
-        if st.button("💾 Save All Configuration", type="primary", key="save_all_config"):
+        if st.button("Save All Configuration", type="primary", key="save_all_config"):
             # Update configuration with all values from tabs
             new_config = {
                 "EQUITY": equity,
@@ -1417,7 +1417,7 @@ def main():
                 st.error(message)
     
     elif page == "Raw Configuration":        
-        st.info("💡 **Tip:** After saving, restart your trading application for changes to take effect.")
+        st.info("**Tip:** After saving, restart your trading application for changes to take effect.")
         
         # Read and display the current creds.json content
         try:
@@ -1436,29 +1436,29 @@ def main():
                 # Save button for raw configuration
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("💾 Save Raw Configuration", type="primary", key="save_raw_config"):
+                    if st.button("Save Raw Configuration", type="primary", key="save_raw_config"):
                         try:
                             # Validate JSON before saving
                             json.loads(edited_content)
                             with open('creds.json', 'w', encoding='utf-8') as file:
                                 file.write(edited_content)
-                            st.success("✅ Raw configuration saved successfully!")
+                            st.success("Raw configuration saved successfully!")
                             st.rerun()
                         except json.JSONDecodeError as e:
-                            st.error(f"❌ Invalid JSON: {str(e)}")
+                            st.error(f"Invalid JSON: {str(e)}")
                         except Exception as e:
-                            st.error(f"❌ Error saving configuration: {str(e)}")
+                            st.error(f"Error saving configuration: {str(e)}")
                 
                 with col2:
                     if st.button("🔄 Reload from File", key="reload_raw_config"):
                         st.rerun()
                         
             else:
-                st.error("❌ creds.json does not exist. Create it first in the Configuration Editor.")
+                st.error("creds.json does not exist. Create it first in the Configuration Editor.")
                 
         except Exception as e:
-            st.error(f"❌ Error reading creds.json: {str(e)}")
-            st.info("💡 Make sure creds.json exists in the current directory.")
+            st.error(f"Error reading creds.json: {str(e)}")
+            st.info("Make sure creds.json exists in the current directory.")
 
 if __name__ == "__main__":
     main()
