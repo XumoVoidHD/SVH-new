@@ -119,6 +119,7 @@
     "RISK_CONFIG": {
         "alpha_score_threshold": 85,
         "risk_per_trade": 0.004,
+        "max_position_equity_pct": 0.1,
         "max_daily_trades": 10,
         "daily_drawdown_limit": 0.02,
         "monthly_drawdown_limit": 0.08,

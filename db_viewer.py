@@ -49,6 +49,7 @@ def load_config():
                 "RISK_CONFIG": {
                     "alpha_score_threshold": 85,
                     "risk_per_trade": 0.004,
+                    "max_position_equity_pct": 0.1,
                     "max_daily_trades": 10,
                     "daily_drawdown_limit": 0.02,
                     "monthly_drawdown_limit": 0.08,
@@ -791,6 +792,16 @@ def main():
                     key="risk_per_trade", 
                     format="%.3f"
                 )
+                max_position_equity_pct = st.number_input(
+                    "Max Position Equity (%):", 
+                    min_value=0.01, 
+                    max_value=1.0, 
+                    value=risk_config.get('max_position_equity_pct', 0.1), 
+                    step=0.01, 
+                    key="max_position_equity_pct", 
+                    format="%.2f",
+                    help="Maximum percentage of total equity that can be allocated to a single position"
+                )
                 max_daily_trades = st.number_input(
                     "Max Daily Trades:", 
                     min_value=1, 
@@ -1349,6 +1360,7 @@ def main():
                 "RISK_CONFIG": {
                     "alpha_score_threshold": alpha_threshold,
                     "risk_per_trade": risk_per_trade,
+                    "max_position_equity_pct": max_position_equity_pct,
                     "max_daily_trades": max_daily_trades,
                     "daily_drawdown_limit": daily_drawdown,
                     "monthly_drawdown_limit": monthly_drawdown,

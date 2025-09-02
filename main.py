@@ -654,7 +654,9 @@ class Strategy:
             return 0, 0, 0, 0
         
         # Calculate capital for trade based on risk_per_trade percentage
-        capital_for_trade = account_equity * risk_per_trade
+        capital_for_trade = ((account_equity * risk_per_trade)/(stop_loss_pct/100))
+        if capital_for_trade > (account_equity * creds.RISK_CONFIG.max_position_equity_pct):
+            capital_for_trade = account_equity * creds.RISK_CONFIG.max_position_equity_pct
         
         # Calculate shares based on available capital
         shares = int(capital_for_trade / current_price)
