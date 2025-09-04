@@ -1,7 +1,6 @@
+from simulation import ibkr_broker
 import pandas as pd
 from stock_selector import StockSelector
-from simulation.schwab_broker import SchwabBroker
-from simulation.forward_broker import ForwardBroker
 import random
 import threading
 import time
@@ -258,10 +257,15 @@ class Strategy:
             
             # Calculate shares to short
             hedge_shares = int(hedge_amount / xlf_price)
+
+            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=xlf_price, side="SELL")
+            if trade is None:
+                print(f"Unable to place hedge order for {self.hedge_symbol}")
+                return
             
             print(f"Executing {hedge_level} hedge:")
             print(f"  - Hedge amount: ${hedge_amount:,.0f} ({beta*100:.1f}% of equity)")
-            print(f"  - {self.hedge_symbol} price: ${xlf_price:.2f}")
+            print(f"  - {self.hedge_symbol} price: ${trade['avgFillPrice']:.2f}")
             print(f"  - Shares to short: {hedge_shares}")
             
             # Update hedge status and track hedge position
@@ -275,7 +279,7 @@ class Strategy:
                 hedge_symbol=self.hedge_symbol,
                 hedge_level=hedge_level,
                 hedge_beta=beta,
-                hedge_entry_price=xlf_price,
+                hedge_entry_price=trade['avgFillPrice'],
                 hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
             )
 
@@ -319,6 +323,11 @@ class Strategy:
             if hasattr(self, 'hedge_entry_price') and self.hedge_entry_price:
                 hedge_pnl = (self.hedge_entry_price - current_xlf_price) * self.hedge_shares
             
+            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=self.hedge_shares, order_type="MARKET", price=current_xlf_price, side="SELL")
+            if trade is None:
+                print(f"Unable to place hedge order for {self.hedge_symbol}")
+                return
+
             # Update hedge status
             self.hedge_active = False
             self.hedge_shares = 0
@@ -735,75 +744,51 @@ class Strategy:
                 print(f"  - Stop Loss: ${stop_loss:.2f}")
                 print(f"  - Exit: Market-On-Close at 4:00 PM ET")
                 
-                # Get current time in USA Central Time
-                central_tz = pytz.timezone('America/Chicago')
-                curr_time = datetime.now(central_tz)
-                target_time = curr_time + timedelta(seconds=creds.ORDER_CONFIG.order_window)
-                
-                while curr_time < target_time:
-                    self.current_price = self.broker.get_current_price(self.stock)
-                    print(f"Current price: {self.current_price}")
-                    
-                    # Check if current_price is None before comparison
-                    if self.current_price is None:
-                        print(f"Unable to get current price for {self.stock}, retrying...")
-                        time.sleep(1)
-                        continue
-                    
-                    if self.current_price >= limit_price:                
-                        with self.manager.manager_lock:
-                            self.used_capital += shares * limit_price
-                            self.used_margin = shares * limit_price
-                            print(f"Used Margin: ${self.used_margin:.2f}")
-                            print(f"Used Capital: ${self.used_capital:.2f}")
-                        
-                        # Initialize position tracking variables
-                        self.entry_price = limit_price
-                        self.stop_loss_price = stop_loss
-                        self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0].gain)  # Use 1% from profit booking levels
-                        self.position_shares = shares
-                        self.position_active = True
-                        
-                        # Reset profit booking and trailing stop levels for new position
-                        self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
-                        self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
-                        print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
-                        # Get current time in USA Central Time
-                        central_tz = pytz.timezone('America/Chicago')
-                        self.entry_time = datetime.now(central_tz)
-                        self.current_price = limit_price
-                        self.unrealized_pnl = 0.0
-                        self.realized_pnl = 0.0
-                        print(f"Position tracking initialized for {self.stock}:")
-                        print(f"  - Entry Price: ${self.entry_price:.2f}")
-                        print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
-                        print(f"  - Take Profit: ${self.take_profit_price:.2f}")
-                        print(f"  - Entry Time: {self.entry_time}")
-                        
-                        # Update database with position initialization
-                        trades_db.update_strategy_data(self.stock,
-                            position_active=True,
-                            position_shares=shares,
-                            entry_price=self.entry_price,
-                            stop_loss_price=self.stop_loss_price,
-                            take_profit_price=self.take_profit_price,
-                            entry_time=self.entry_time,
-                            current_price=self.current_price,
-                            unrealized_pnl=self.unrealized_pnl,
-                            realized_pnl=self.realized_pnl,
-                            used_margin=self.used_margin
-                        )
-                
-                        
-                        return shares, entry_price, stop_loss, limit_price
-                    else:
-                        print(f"Current price: {self.current_price} is not >= limit price: {limit_price}")
-                        time.sleep(1)
-                        continue
+                trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="LIMIT", price=limit_price, side="BUY")
+                if trade is None:
+                    print(f"Unable to place order for {self.stock}")
+                    return
                 else:
-                    print("Order not filled on time")    
-                    return -1
-                
+                    print(f"Order placed for {self.stock}: {trade}")
+                    with self.manager.manager_lock:
+                        self.used_capital += shares * trade['avgFillPrice']
+                        self.used_margin = shares * trade['avgFillPrice']
+                        print(f"Used Margin: ${self.used_margin:.2f}")
+                        print(f"Used Capital: ${self.used_capital:.2f}")
+
+                    self.entry_price = trade['avgFillPrice']
+                    self.stop_loss_price = stop_loss
+                    self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0].gain)  # Use 1% from profit booking levels
+                    self.position_shares = shares
+                    self.position_active = True
+                    self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
+                    self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
+                    print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
+
+                    central_tz = pytz.timezone('America/Chicago')
+                    self.entry_time = datetime.now(central_tz)
+                    self.current_price = trade['avgFillPrice']
+                    self.unrealized_pnl = 0.0
+                    self.realized_pnl = 0.0
+                    print(f"Position tracking initialized for {self.stock}:")
+                    print(f"  - Entry Price: ${self.entry_price:.2f}")
+                    print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
+                    print(f"  - Take Profit: ${self.take_profit_price:.2f}")
+                    print(f"  - Entry Time: {self.entry_time}")
+                    
+                    # Update database with position initialization
+                    trades_db.update_strategy_data(self.stock,
+                        position_active=True,
+                        position_shares=shares,
+                        entry_price=self.entry_price,
+                        stop_loss_price=self.stop_loss_price,
+                        take_profit_price=self.take_profit_price,
+                        entry_time=self.entry_time,
+                        current_price=self.current_price,
+                        unrealized_pnl=self.unrealized_pnl,
+                        realized_pnl=self.realized_pnl,
+                        used_margin=self.used_margin
+                    )
         else:
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
                 print(f"Alpha Score too low: {self.score} < {creds.RISK_CONFIG.alpha_score_threshold}")
@@ -1022,15 +1007,18 @@ class Strategy:
             shares_to_sell = self.position_shares
         elif shares_to_sell < self.position_shares:
             print(f"Partially closing position: {shares_to_sell} shares out of {self.position_shares}")
-
         if shares_to_sell <= 0:
             print(f"No shares to sell for {self.stock}")
             return
-
-        # Calculate realized PnL for shares being sold
-        realized_pnl = (current_price - self.entry_price) * shares_to_sell
         
+        # Calculate realized PnL for shares being sold
+        
+        trade = self.broker.place_order(symbol=self.stock, qty=shares_to_sell, order_type="MARKET", price=current_price, side="SELL")
+        if trade is None:
+            print(f"Unable to place order for {self.stock}")
+            return
         # Update remaining shares
+        realized_pnl = (trade['avgFillPrice'] - self.entry_price) * shares_to_sell
         self.position_shares -= shares_to_sell
 
         if self.position_shares <= 0:
@@ -1079,7 +1067,7 @@ class Strategy:
             print(f"Partial position closed. Remaining shares: {self.position_shares}")
             
             # Update unrealized PnL for remaining position
-            self.unrealized_pnl = (current_price - self.entry_price) * self.position_shares
+            self.unrealized_pnl = (trade['avgFillPrice'] - self.entry_price) * self.position_shares
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
@@ -1280,187 +1268,58 @@ class Strategy:
         
         print(f"Position tracking reset for {self.stock}")
     
-
-
 class StrategyBroker:
-    
+
     def __init__(self):
-        self.broker = SchwabBroker()
-        # Initialize ForwardBroker for order execution
-        self.forward_broker = ForwardBroker(
-            initial_balance=creds.EQUITY,
-            spread=0.0,
-            commission_fixed=0.0,
-            commission_rel=0.0
-        )
-        self.initial_balance = creds.EQUITY
+        self.client = ibkr_broker.IBTWSAPI()
+        self.client.connect()
     
-    def get_historical_data(self, num, stock):
-        try:
-            if num in [1, 5, 10, 15, 30]:            
-                data = self.broker.get_price_history(
-                    symbol=stock,
-                    period_type="day",
-                    period=1,
-                    frequency_type="minute",
-                    frequency=num,
-                    need_extended_hours_data=False
-                )
+    def is_connected(self):
+        return self.client.is_connected()
+
+    def get_current_price(self, stock: str):
+        return self.client.get_stock_price(stock)
+
+
+    def get_historical_data(self, stock: str, bar_size: str = '3 mins', num: str = '1 D', 
+                           exchange: str = 'SMART', max_retries: int = 3, retry_delay: float = 2.0):
+        for attempt in range(max_retries + 1):  # +1 because we want to try max_retries times after the first attempt
+            try:
+                print(f"Attempting to fetch historical data for {stock} (attempt {attempt + 1}/{max_retries + 1})")
                 
-                print(f"DEBUG: Raw data for {stock}: {type(data)}")
-                if data:
-                    print(f"DEBUG: Data keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-                    if isinstance(data, dict) and "candles" in data:
-                        print(f"DEBUG: Candles data type: {type(data['candles'])}, length: {len(data['candles']) if data['candles'] else 0}")
-                        if data["candles"]:
-                            df = pd.DataFrame(data["candles"])
-                            print(f"DEBUG: DataFrame columns: {list(df.columns)}")
-                            print(f"DEBUG: DataFrame shape: {df.shape}")
-                            
-                            # Check if datetime column exists
-                            if "datetime" in df.columns:
-                                df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
-                                # Convert UTC datetime to US Eastern Time
-                                df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
-                                df.set_index("datetime", inplace=True)
-                                return df
-                            else:
-                                print(f"ERROR: No 'datetime' column found. Available columns: {list(df.columns)}")
-                                return pd.DataFrame()
-                        else:
-                            print(f"ERROR: Empty candles data for {stock}")
-                            return pd.DataFrame()
-                    else:
-                        print(f"ERROR: No 'candles' key in data for {stock}")
-                        return pd.DataFrame()
+                data = self.client.get_historical_data(stock, num, bar_size, exchange)
+                
+                # Check if we got valid data
+                if data is not None and not data.empty and len(data) > 0:
+                    print(f"Successfully fetched {len(data)} bars of historical data for {stock}")
+                    return data
                 else:
-                    print(f"ERROR: No data received from broker for {stock}")
-                    return pd.DataFrame()
-            else:
-                data = self.broker.get_price_history(
-                    symbol=stock,
-                    period_type="day",
-                    period=1,
-                    frequency_type="minute",
-                    frequency=1,
-                    need_extended_hours_data=False
-                )
-
-                if data and "candles" in data and data["candles"]:
-                    df = pd.DataFrame(data["candles"])
-                    if "datetime" in df.columns:
-                        df["datetime"] = pd.to_datetime(df["datetime"], unit="ms")
-                        # Convert UTC datetime to US Eastern Time
-                        df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert("America/New_York")
-                        df.set_index("datetime", inplace=True)
-
-                        # Resample to 3-minute candles
-                        df_min = df.resample(f"{num}min").agg({
-                            'open': 'first',
-                            'high': 'max',
-                            'low': 'min',
-                            'close': 'last',
-                            'volume': 'sum'
-                        }).dropna()
-
-                        return df_min
-                    else:
-                        print(f"ERROR: No 'datetime' column found for resampling {stock}")
-                        return pd.DataFrame()
-                else:
-                    print(f"ERROR: No candles data received from broker for {stock}")
-                    return pd.DataFrame()
-        except Exception as e:
-            print(f"ERROR: Exception in get_historical_data for {stock}: {e}")
-            return pd.DataFrame()
-    
-    def get_current_price(self, symbol: str):
-        return self.broker.get_current_price(symbol)
-    
-    def place_order(self, symbol: str, qty: int, order_type: str = 'MARKET', 
-                   price: float = None, stop_loss: float = None, take_profit: float = None, side: str = 'BUY'):
-        """
-        Place an order using the ForwardBroker
+                    print(f"Attempt {attempt + 1}: No data returned for {stock}")
+                    
+            except Exception as e:
+                print(f"Attempt {attempt + 1}: Error fetching historical data for {stock}: {str(e)}")
+            
+            # If this wasn't the last attempt, wait before retrying
+            if attempt < max_retries:
+                print(f"Waiting {retry_delay} seconds before retry...")
+                time.sleep(retry_delay)
         
-        Args:
-            symbol: Stock symbol
-            qty: Number of shares (positive for buy, negative for sell)
-            order_type: 'MARKET' or 'LIMIT'
-            price: Limit price (required for LIMIT orders)
-            stop_loss: Stop loss price
-            take_profit: Take profit price
-            
-        Returns:
-            tuple: (order_id, executed_price) or (None, None) if failed
-        """
-        try:
-            # Ensure symbol is being tracked
-            self.forward_broker.add_symbol(symbol)
-            
-            # Use the provided side parameter
-            abs_qty = abs(qty)
-            
-            # Create order parameters
-            order_params = {
-                'symbol': symbol,
-                'side': side,
-                'quantity': abs_qty,
-                'ordertype': order_type,
-                'price': price or 0,
-                'stoploss': stop_loss or 0,
-                'take_profit': take_profit or 0
-            }
-            
-            # Place order through ForwardBroker
-            order_id, executed_price = self.forward_broker.place_order(order_params)
-            
-            if order_id:
-                print("ORDER PLACED SUCCESSFULLY:")
-                print(f"  - Order ID: {order_id}")
-                print(f"  - Symbol: {symbol}")
-                print(f"  - Side: {side}")
-                print(f"  - Quantity: {abs_qty}")
-                print(f"  - Order Type: {order_type}")
-                if price:
-                    print(f"  - Limit Price: ${price:.2f}")
-                if executed_price:
-                    print(f"  - Executed Price: ${executed_price:.2f}")
-                if stop_loss:
-                    print(f"  - Stop Loss: ${stop_loss:.2f}")
-                if take_profit:
-                    print(f"  - Take Profit: ${take_profit:.2f}")
-            
-            return order_id, executed_price
-            
-        except Exception as e:
-            print(f"ERROR PLACING ORDER for {symbol}: {str(e)}")
-            return None, None
-    
-    def get_positions(self):
-        """Get current positions from ForwardBroker"""
-        return self.forward_broker.get_positions()
-    
-    def get_trades(self):
-        """Get all trades from ForwardBroker"""
-        return self.forward_broker.get_all_trades()
-    
-    def get_broker_summary(self):
-        """Get broker summary from ForwardBroker"""
-        return {
-            'cash': self.forward_broker.cash,
-            'equity': self.forward_broker.equity,
-            'margin_used': self.forward_broker.margin_used,
-            'free_margin': self.forward_broker.free_margin,
-            'total_pnl': self.forward_broker.total_pnl()
-        }
+        # If we get here, all retries failed
+        print(f"ERROR: Failed to fetch historical data for {stock} after {max_retries + 1} attempts")
+        return pd.DataFrame()
+
+    def place_order(self, symbol: str, qty: int, order_type: str = 'MARKET', 
+               price: float = None, side: str = 'BUY', max_retries: int = 3, retry_delay: float = 2.0):
+
+        trade = self.client.place_order(symbol=symbol, quantity=qty, order_type=order_type, price = price, side=side)
+        if trade["status"] == "Filled":
+            return trade
+        else:
+            return None
 
     def get_total_pnl(self):
-        """Get total PnL from ForwardBroker"""
-        return self.forward_broker.total_pnl()
+        return 0
 
-    def filled_check(self, symbol: str):
-        time.sleep(3)
-        return self.forward_broker.filled_check(symbol)
 
 class StrategyManager:
     

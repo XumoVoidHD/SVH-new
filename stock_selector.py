@@ -2,6 +2,7 @@ import pandas as pd
 import time
 from collections import defaultdict
 import yfinance as yf
+from simulation.ibkr_broker import IBTWSAPI
 from simulation.schwab_broker import SchwabBroker
 import json
 from types import SimpleNamespace
@@ -50,7 +51,7 @@ class StockSelector:
         for i in range(0, len(self.symbols), self.batch_size):
             batch = self.symbols[i:i + self.batch_size]
             try:
-                quotes = self.client.get_bulk_quotes(batch, fields="quote")
+                quotes = self.client.get_bulk_quotes(batch)
                 for symbol in batch:
                     q = quotes.get(symbol, {}).get("quote", {})
                     price = q.get("mark") or q.get("lastPrice")
