@@ -7,7 +7,6 @@ from simulation.schwab_broker import SchwabBroker
 import json
 from types import SimpleNamespace
 
-
 def load_config(json_file='creds.json'):
     """Load configuration from JSON file and make it accessible like a module"""
     with open(json_file, 'r') as f:
@@ -31,7 +30,11 @@ class StockSelector:
     def __init__(self, csv_path='companies_by_marketcap.csv'):
         self.csv_path = csv_path
         self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
-        self.client = SchwabBroker()
+        self.price_filter = creds.STOCK_SELECTION.price_min
+        self.volume_filter = creds.STOCK_SELECTION.volume_min
+        # self.client = SchwabBroker()
+        self.client = IBTWSAPI()
+        self.client.connect()
         self.batch_size = 50
 
         self.symbols = []
@@ -48,25 +51,91 @@ class StockSelector:
         print(f"Loaded {len(self.symbols)} symbols with market cap > {self.market_cap_filter}")
 
     def filter_by_price_volume(self):
-        for i in range(0, len(self.symbols), self.batch_size):
-            batch = self.symbols[i:i + self.batch_size]
-            try:
-                quotes = self.client.get_bulk_quotes(batch)
-                for symbol in batch:
-                    q = quotes.get(symbol, {}).get("quote", {})
-                    price = q.get("mark") or q.get("lastPrice")
-                    volume = q.get("totalVolume")
+        df = pd.read_csv("companies_by_marketcap.csv")
+        df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
+        df["price (USD)"] = pd.to_numeric(df["price (USD)"], errors="coerce")
+        df = df[(df["marketcap"] > self.market_cap_filter) & (df["price (USD)"] > self.price_filter)]
+        tic = df["Symbol"].tolist()
+        print(f"Loaded {len(tic)} symbols with market cap > {self.market_cap_filter} and price > {self.price_filter}")
 
-                    if price and price >= creds.STOCK_SELECTION.price_min and volume and volume >= creds.STOCK_SELECTION.volume_min:
-                        self.filtered.append({
-                            "symbol": symbol,
-                            "price": price,
-                            "volume": volume
-                        })
-            except Exception as e:
-                print(f"Skipping batch {batch}: {e}")
+        print(f"Testing bulk quotes for {len(tic)} symbols...")
+        start_time = time.time()
+    
+        # Process symbols in batches of 50
+        batch_size = 50
+        all_quotes = {}
+        
+        for i in range(0, len(tic), batch_size):
+            batch = tic[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(tic) + batch_size - 1) // batch_size
+            
+            print(f"Processing batch {batch_num}/{total_batches} with {len(batch)} symbols...")
+            
+            # Get quotes for this batch
+            batch_quotes = self.client.get_slo_bulk_quotes(batch)
+            
+            # Store results in all_quotes
+            all_quotes.update(batch_quotes)
+            
+            print(f"Batch {batch_num} completed. Total quotes collected: {len(all_quotes)}")
+        
+        end_time = time.time()
+        print(f"All batches completed. Time taken: {end_time - start_time} seconds")
+        print(f"Total quotes collected: {len(all_quotes)}")
+        
+        # Store the final results in quotes variable
+        quotes = all_quotes
+        print("Original quotes:")
+        print(quotes)
+        
+        # Filter out stocks with volume < 100,000 and price < 10
+        filtered_quotes = {}
+        for symbol, data in quotes.items():
+            if data and 'volume' in data and 'price' in data:
+                volume = data['volume']
+                price = data['price']
+                
+                # Keep stocks with volume >= 100,000 AND price >= 10
+                if volume >= self.volume_filter and price >= self.price_filter:
+                    filtered_quotes[symbol] = data
+                else:
+                    print(f"Removing {symbol}: volume={volume}, price={price}")
+        
+        print(f"\nFiltered quotes (removed {len(quotes) - len(filtered_quotes)} stocks):")
+        print(filtered_quotes)
+        print(f"Remaining stocks: {len(filtered_quotes)}")
+        
+        # Add filtered stocks to self.filtered
+        for symbol, data in filtered_quotes.items():
+            self.filtered.append({
+                "symbol": symbol,
+                "price": data['price'],
+                "volume": data['volume']
+            })
+        
+        print(f"Added {len(filtered_quotes)} stocks to self.filtered")
 
-        print(f"{len(self.filtered)} stocks passed price & volume filter")
+    # def filter_by_price_volume(self):
+    #     for i in range(0, len(self.symbols), self.batch_size):
+    #         batch = self.symbols[i:i + self.batch_size]
+    #         try:
+    #             quotes = self.client.get_bulk_quotes(batch)
+    #             for symbol in batch:
+    #                 q = quotes.get(symbol, {}).get("quote", {})
+    #                 price = q.get("mark") or q.get("lastPrice")
+    #                 volume = q.get("totalVolume")
+
+    #                 if price and price >= creds.STOCK_SELECTION.price_min and volume and volume >= creds.STOCK_SELECTION.volume_min:
+    #                     self.filtered.append({
+    #                         "symbol": symbol,
+    #                         "price": price,
+    #                         "volume": volume
+    #                     })
+    #         except Exception as e:
+    #             print(f"Skipping batch {batch}: {e}")
+
+    #     print(f"{len(self.filtered)} stocks passed price & volume filter")
 
     def enrich_with_alpha_and_sector(self):
         for stock in self.filtered:
@@ -150,5 +219,5 @@ class StockSelector:
 
 if __name__ == "__main__":
     selector = StockSelector()
-    top_sector_stocks = selector.run()
+    top_sector_stocks = selector.filter_by_price_volume()
     print(top_sector_stocks)

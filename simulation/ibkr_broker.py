@@ -229,6 +229,13 @@ class IBTWSAPI:
             "volume": ticker.volume
         }
 
+    def get_slo_bulk_quotes(self, symbols: list, max_retries: int = 3, retry_delay: float = 2.0):
+        result = {}
+        for i in symbols:
+            quote = self.get_quote(i)
+            print(quote)
+            result[i] = quote
+        return result
 
     def get_bulk_quotes(self, symbols: list, currency: str = 'USD', batch_size: int = 50, exchange: str = 'SMART'):
         

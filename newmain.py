@@ -131,7 +131,25 @@ if __name__ == "__main__":
     
     # Store the final results in quotes variable
     quotes = all_quotes
+    print("Original quotes:")
     print(quotes)
+    
+    # Filter out stocks with volume < 100,000 and price < 10
+    filtered_quotes = {}
+    for symbol, data in quotes.items():
+        if data and 'volume' in data and 'price' in data:
+            volume = data['volume']
+            price = data['price']
+            
+            # Keep stocks with volume >= 100,000 AND price >= 10
+            if volume >= 10_000 and price >= 10:
+                filtered_quotes[symbol] = data
+            else:
+                print(f"Removing {symbol}: volume={volume}, price={price}")
+    
+    print(f"\nFiltered quotes (removed {len(quotes) - len(filtered_quotes)} stocks):")
+    print(filtered_quotes)
+    print(f"Remaining stocks: {len(filtered_quotes)}")
 
     # # Test current price
     # current_price = strategy_broker.get_current_price("AAPL")
