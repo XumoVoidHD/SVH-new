@@ -50,71 +50,135 @@ class StockSelector:
         self.symbols = df["Symbol"].tolist()
         print(f"Loaded {len(self.symbols)} symbols with market cap > {self.market_cap_filter}")
 
+    def process_volume_batch(self, batch):
+        result = {}
+        for _, row in batch.iterrows():
+            symbol = row["Symbol"]
+            price = row["price (USD)"]
+
+            # Fetch yesterday's volume
+            volume = self.client.get_volume(symbol)
+
+            if volume >= self.volume_filter:
+                result[symbol] = {
+                    "symbol": symbol,
+                    "price": price,
+                    "volume": volume
+                }
+                print(f"Added {symbol} to result")
+        return result
+
+    def process_volume_batch(self, batch):
+        result = {}
+        for _, row in batch.iterrows():
+            symbol = row["Symbol"]
+            price = row["price (USD)"]
+
+            # Fetch yesterday's volume
+            volume = self.client.get_volume(symbol)
+
+            if volume >= self.volume_filter:
+                result[symbol] = {
+                    "symbol": symbol,
+                    "price": price,
+                    "volume": volume
+                }
+                print(f"Added {symbol} to result")
+        return result
+
     def filter_by_price_volume(self):
+        start_time = time.time()
         df = pd.read_csv("companies_by_marketcap.csv")
         df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
         df["price (USD)"] = pd.to_numeric(df["price (USD)"], errors="coerce")
-        df = df[(df["marketcap"] > self.market_cap_filter) & (df["price (USD)"] > self.price_filter)]
-        tic = df["Symbol"].tolist()
-        print(f"Loaded {len(tic)} symbols with market cap > {self.market_cap_filter} and price > {self.price_filter}")
 
-        print(f"Testing bulk quotes for {len(tic)} symbols...")
-        start_time = time.time()
-    
-        # Process symbols in batches of 50
+        # Apply filters
+        df = df[(df["marketcap"] > self.market_cap_filter) & (df["price (USD)"] > self.price_filter)]
+        print(f"Filtered {len(df)} symbols with market cap > {self.market_cap_filter} and price > {self.price_filter}")
+        # Process in batches
         batch_size = 50
         all_quotes = {}
-        
-        for i in range(0, len(tic), batch_size):
-            batch = tic[i:i + batch_size]
-            batch_num = (i // batch_size) + 1
-            total_batches = (len(tic) + batch_size - 1) // batch_size
-            
-            print(f"Processing batch {batch_num}/{total_batches} with {len(batch)} symbols...")
-            
-            # Get quotes for this batch
-            batch_quotes = self.client.get_slo_bulk_quotes(batch)
-            
-            # Store results in all_quotes
+        for i in range(0, len(df), batch_size):
+            batch = df.iloc[i:i + batch_size]
+            batch_quotes = self.process_volume_batch(batch)
             all_quotes.update(batch_quotes)
-            
-            print(f"Batch {batch_num} completed. Total quotes collected: {len(all_quotes)}")
-        
-        end_time = time.time()
-        print(f"All batches completed. Time taken: {end_time - start_time} seconds")
+            print(f"Batch {i//batch_size + 1} completed. Total quotes collected: {len(all_quotes)}")
+
+        for i in all_quotes:
+            self.filtered.append(all_quotes[i])
+
+        # Final results
         print(f"Total quotes collected: {len(all_quotes)}")
+        end_time = time.time()
+        print(f"Time taken: {end_time - start_time:.2f} seconds")
+
+        return all_quotes
         
-        # Store the final results in quotes variable
-        quotes = all_quotes
-        print("Original quotes:")
-        print(quotes)
+    # def filter_by_price_volume(self):
+    #     df = pd.read_csv("companies_by_marketcap.csv")
+    #     df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
+    #     df["price (USD)"] = pd.to_numeric(df["price (USD)"], errors="coerce")
+    #     df = df[(df["marketcap"] > self.market_cap_filter) & (df["price (USD)"] > self.price_filter)]
+    #     tic = df["Symbol"].tolist()
+    #     print(f"Loaded {len(tic)} symbols with market cap > {self.market_cap_filter} and price > {self.price_filter}")
+
+    #     print(f"Testing bulk quotes for {len(tic)} symbols...")
+    #     start_time = time.time()
+    
+    #     # Process symbols in batches of 50
+    #     batch_size = 50
+    #     all_quotes = {}
         
-        # Filter out stocks with volume < 100,000 and price < 10
-        filtered_quotes = {}
-        for symbol, data in quotes.items():
-            if data and 'volume' in data and 'price' in data:
-                volume = data['volume']
-                price = data['price']
+    #     for i in range(0, len(tic), batch_size):
+    #         batch = tic[i:i + batch_size]
+    #         batch_num = (i // batch_size) + 1
+    #         total_batches = (len(tic) + batch_size - 1) // batch_size
+            
+    #         print(f"Processing batch {batch_num}/{total_batches} with {len(batch)} symbols...")
+            
+    #         # Get quotes for this batch
+    #         batch_quotes = self.process_volume_batch(batch)
+            
+    #         # Store results in all_quotes
+    #         all_quotes.update(batch_quotes)
+            
+    #         print(f"Batch {batch_num} completed. Total quotes collected: {len(all_quotes)}")
+        
+    #     end_time = time.time()
+    #     print(f"All batches completed. Time taken: {end_time - start_time} seconds")
+    #     print(f"Total quotes collected: {len(all_quotes)}")
+        
+    #     # Store the final results in quotes variable
+    #     quotes = all_quotes
+    #     print("Original quotes:")
+    #     print(quotes)
+        
+    #     # Filter out stocks with volume < 100,000 and price < 10
+    #     filtered_quotes = {}
+    #     for symbol, data in quotes.items():
+    #         if data and 'volume' in data and 'price' in data:
+    #             volume = data['volume']
+    #             price = data['price']
                 
-                # Keep stocks with volume >= 100,000 AND price >= 10
-                if volume >= self.volume_filter and price >= self.price_filter:
-                    filtered_quotes[symbol] = data
-                else:
-                    print(f"Removing {symbol}: volume={volume}, price={price}")
+    #             # Keep stocks with volume >= 100,000 AND price >= 10
+    #             if volume >= self.volume_filter and price >= self.price_filter:
+    #                 filtered_quotes[symbol] = data
+    #             else:
+    #                 print(f"Removing {symbol}: volume={volume}, price={price}")
         
-        print(f"\nFiltered quotes (removed {len(quotes) - len(filtered_quotes)} stocks):")
-        print(filtered_quotes)
-        print(f"Remaining stocks: {len(filtered_quotes)}")
+    #     print(f"\nFiltered quotes (removed {len(quotes) - len(filtered_quotes)} stocks):")
+    #     print(filtered_quotes)
+    #     print(f"Remaining stocks: {len(filtered_quotes)}")
         
-        # Add filtered stocks to self.filtered
-        for symbol, data in filtered_quotes.items():
-            self.filtered.append({
-                "symbol": symbol,
-                "price": data['price'],
-                "volume": data['volume']
-            })
+    #     # Add filtered stocks to self.filtered
+    #     for symbol, data in filtered_quotes.items():
+    #         self.filtered.append({
+    #             "symbol": symbol,
+    #             "price": data['price'],
+    #             "volume": data['volume']
+    #         })
         
-        print(f"Added {len(filtered_quotes)} stocks to self.filtered")
+    #     print(f"Added {len(filtered_quotes)} stocks to self.filtered")
 
     # def filter_by_price_volume(self):
     #     for i in range(0, len(self.symbols), self.batch_size):
@@ -210,7 +274,7 @@ class StockSelector:
             return [], []
 
         top_df = pd.DataFrame(top_sector_stocks).sort_values(by="alpha_5d", ascending=False)
-        # top_df.to_csv("filtered_top_sectors.csv", index=False)
+        top_df.to_csv("filtered_top_sectors.csv", index=False)
 
         end_time = time.time()
         print(f"\nTime Taken: {end_time - start_time:.2f} seconds")
@@ -219,5 +283,5 @@ class StockSelector:
 
 if __name__ == "__main__":
     selector = StockSelector()
-    top_sector_stocks = selector.filter_by_price_volume()
+    top_sector_stocks = selector.run()
     print(top_sector_stocks)

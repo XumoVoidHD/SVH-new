@@ -11,7 +11,7 @@ import pandas as pd
 # Default values for connection and trading parameters
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 7497
-DEFAULT_CLIENT_ID = 13
+DEFAULT_CLIENT_ID = 14
 DEFAULT_CURRENCY = "USD"
 DEFAULT_EXCHANGE = "SMART"
 # util.logToConsole('DEBUG')
@@ -210,10 +210,11 @@ class IBTWSAPI:
         # Request snapshot data
         ticker = self.client.reqMktData(contract, snapshot=True)
 
-        # Wait for ticker data to populate, sleep 0.1 while NaN (max 5 seconds)
+        # Wait for both price and volume data to populate, sleep 0.1 while NaN (max 5 seconds)
         max_wait_time = 5.0  # Maximum wait time in seconds
         wait_time = 0.0
-        while util.isNan(ticker.marketPrice()) and util.isNan(ticker.last) and wait_time < max_wait_time:
+        while (util.isNan(ticker.marketPrice()) and util.isNan(ticker.last) and 
+               util.isNan(ticker.volume) and wait_time < max_wait_time):
             self.client.sleep(0.1)
             wait_time += 0.1
 
@@ -223,10 +224,22 @@ class IBTWSAPI:
         elif ticker.last and ticker.last > 0:
             price = ticker.last
 
+        volume = ticker.volume
+        
+        # Additional check: if volume is still NaN, try to get it again with a longer wait
+        import math
+        if math.isnan(volume):
+            print(f"Volume still NaN for {symbol}, waiting longer...")
+            additional_wait = 0.0
+            while util.isNan(ticker.volume) and additional_wait < 2.0:
+                self.client.sleep(0.2)
+                additional_wait += 0.2
+            volume = ticker.volume
+
         return {
             "symbol": symbol,
             "price": price,
-            "volume": ticker.volume
+            "volume": volume
         }
 
     def get_slo_bulk_quotes(self, symbols: list, max_retries: int = 3, retry_delay: float = 2.0):
@@ -236,6 +249,32 @@ class IBTWSAPI:
             print(quote)
             result[i] = quote
         return result
+
+    def get_volume(self, symbol: str, exchange: str = "SMART", currency: str = "USD"):
+        try:
+            contract = Stock(symbol, exchange, currency)
+
+            bars = self.client.reqHistoricalData(
+                contract,
+                endDateTime='',
+                durationStr='2 D',          # last 2 days
+                barSizeSetting='1 day',     # daily data
+                whatToShow='TRADES',
+                useRTH=True,                # regular trading hours only
+                formatDate=1
+            )
+
+            if len(bars) < 2:
+                print(f"Not enough data returned for {symbol}")
+                return 0
+
+            yesterday_volume = bars[-2].volume
+            return yesterday_volume
+
+        except Exception as e:
+            print(f"Error fetching volume for {symbol}: {e}")
+            return 0
+
 
     def get_bulk_quotes(self, symbols: list, currency: str = 'USD', batch_size: int = 50, exchange: str = 'SMART'):
         

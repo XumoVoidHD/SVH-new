@@ -71,8 +71,8 @@ class TradesDatabase:
             
             for symbol in stock_list:
                 cursor.execute('''
-                    INSERT OR IGNORE INTO stock_strategies (symbol, updated_at) 
-                    VALUES (?, CURRENT_TIMESTAMP)
+                    INSERT OR IGNORE INTO stock_strategies (symbol, additional_checks_passed, updated_at) 
+                    VALUES (?, 0, CURRENT_TIMESTAMP)
                 ''', (symbol,))
             
             conn.commit()

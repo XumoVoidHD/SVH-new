@@ -117,7 +117,7 @@
         }
     },
     "RISK_CONFIG": {
-        "alpha_score_threshold": 85,
+        "alpha_score_threshold": 1,
         "risk_per_trade": 0.004,
         "max_position_equity_pct": 0.1,
         "max_daily_trades": 10,
@@ -164,7 +164,7 @@
         }
     },
     "HEDGE_CONFIG": {
-        "enabled": true,
+        "enabled": false,
         "hedge_symbol": "XLF",
         "triggers": {
             "vix_threshold": 22,
@@ -182,7 +182,7 @@
         }
     },
     "LEVERAGE_CONFIG": {
-        "enabled": true,
+        "enabled": false,
         "max_leverage": 2.0,
         "conditions": {
             "alpha_score_min": 85,
