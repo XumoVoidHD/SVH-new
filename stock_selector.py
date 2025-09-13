@@ -3,9 +3,9 @@ import time
 from collections import defaultdict
 import yfinance as yf
 from simulation.ibkr_broker import IBTWSAPI
-from simulation.schwab_broker import SchwabBroker
 import json
 from types import SimpleNamespace
+from helpers.adv import calc_adv
 
 def load_config(json_file='creds.json'):
     """Load configuration from JSON file and make it accessible like a module"""
@@ -31,7 +31,12 @@ class StockSelector:
         self.csv_path = csv_path
         self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
         self.price_filter = creds.STOCK_SELECTION.price_min
-        self.volume_filter = creds.STOCK_SELECTION.volume_min
+        self.volume_filter_ADV_large_filter = creds.STOCK_SELECTION.ADV_large
+        self.volume_filter_ADV_large_length = creds.STOCK_SELECTION.ADV_large_length
+        self.volume_filter_ADV_small_filter = creds.STOCK_SELECTION.ADV_small
+        self.volume_filter_ADV_small_length = creds.STOCK_SELECTION.ADV_small_length
+        self.rvol_filter = creds.STOCK_SELECTION.RVOL_filter
+        self.rvol_length = creds.STOCK_SELECTION.RVOL_length
         # self.client = SchwabBroker()
         self.client = IBTWSAPI()
         self.client.connect()
@@ -56,34 +61,23 @@ class StockSelector:
             symbol = row["Symbol"]
             price = row["price (USD)"]
 
-            # Fetch yesterday's volume
-            volume = self.client.get_volume(symbol)
-
-            if volume >= self.volume_filter:
+            volume_df_adv = self.client.get_volume(symbol=symbol, duration=f"{self.volume_filter_ADV_large_length} D", bar_size="1 day")
+            adv_large = calc_adv(volume_df_adv, days=self.volume_filter_ADV_large_length)    
+            adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
+        
+            if adv_large >= self.volume_filter_ADV_large_filter and adv_small >= self.volume_filter_ADV_small_filter:
                 result[symbol] = {
                     "symbol": symbol,
                     "price": price,
-                    "volume": volume
+                    "adv_large": adv_large,
+                    "adv_small": adv_small
                 }
                 print(f"Added {symbol} to result")
-        return result
+            else:
+                continue
+            volume_df_rvol = self.client.get_volume(symbol=symbol, duration=f"{self.rvol_length} D", bar_size="15 mins")
 
-    def process_volume_batch(self, batch):
-        result = {}
-        for _, row in batch.iterrows():
-            symbol = row["Symbol"]
-            price = row["price (USD)"]
 
-            # Fetch yesterday's volume
-            volume = self.client.get_volume(symbol)
-
-            if volume >= self.volume_filter:
-                result[symbol] = {
-                    "symbol": symbol,
-                    "price": price,
-                    "volume": volume
-                }
-                print(f"Added {symbol} to result")
         return result
 
     def filter_by_price_volume(self):

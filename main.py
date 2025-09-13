@@ -282,19 +282,6 @@ class Strategy:
                 hedge_entry_price=trade['avgFillPrice'],
                 hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
             )
-
-            # trades_db.update_strategy_data(self.hedge_symbol,
-            #     position_active=True,
-            #     position_shares=0,
-            #     entry_price=0,
-            #     stop_loss_price=0,
-            #     take_profit_price=0,
-            #     entry_time=0,
-            #     current_price=0,
-            #     unrealized_pnl=0,
-            #     realized_pnl=0,
-            #     used_margin=0
-            # )
             
             print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
             print(f"Hedge position tracked in database for {self.stock}")

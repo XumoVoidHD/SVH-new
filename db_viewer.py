@@ -35,8 +35,15 @@ def load_config():
                 "STOCK_SELECTION": {
                     "market_cap_min": 2000000000,
                     "price_min": 10.0,
-                    "volume_min": 1000000,
-                    "alpha_threshold": 0.005
+                    "ADV_large_length": 20,
+                    "ADV_small_length": 10,
+                    "ADV_large": 500000,
+                    "ADV_small": 750000,
+                    "RVOL_length": 10,
+                    "RVOL_filter": 1.3,
+                    "alpha_threshold": 0.005,
+                    "max_sector_weight": 0.3,
+                    "top_sectors_count": 3
                 },
                 "INDICATORS": {
                     "vwap": {"timeframes": ["3min"], "params": {}},
@@ -359,14 +366,23 @@ def main():
                     help="Minimum stock price in dollars"
                 )
                 
-                st.write("**Volume Filter**")
-                volume_min = st.number_input(
-                    "Minimum Daily Volume:", 
+                st.write("**ADV Configuration**")
+                adv_large_length = st.number_input(
+                    "ADV Large Length (days):", 
+                    min_value=5, 
+                    max_value=50, 
+                    value=stock_config.get('ADV_large_length', 20), 
+                    step=1,
+                    help="Number of days for large ADV calculation"
+                )
+                
+                adv_large = st.number_input(
+                    "ADV Large Threshold:", 
                     min_value=100_000, 
-                    max_value=100_000_000, 
-                    value=stock_config.get('volume_min', 1_000_000), 
-                    step=100_000,
-                    help="Minimum daily trading volume"
+                    max_value=10_000_000, 
+                    value=stock_config.get('ADV_large', 500_000), 
+                    step=50_000,
+                    help="Minimum average daily volume for large cap stocks"
                 )
             
             with col2:
@@ -399,6 +415,45 @@ def main():
                     value=stock_config.get('top_sectors_count', 3), 
                     step=1,
                     help="Number of top sectors to focus on"
+                )
+                
+                st.write("**ADV Small Configuration**")
+                adv_small_length = st.number_input(
+                    "ADV Small Length (days):", 
+                    min_value=5, 
+                    max_value=50, 
+                    value=stock_config.get('ADV_small_length', 10), 
+                    step=1,
+                    help="Number of days for small ADV calculation"
+                )
+                
+                adv_small = st.number_input(
+                    "ADV Small Threshold:", 
+                    min_value=100_000, 
+                    max_value=10_000_000, 
+                    value=stock_config.get('ADV_small', 750_000), 
+                    step=50_000,
+                    help="Minimum average daily volume for small cap stocks"
+                )
+                
+                st.write("**RVOL Configuration**")
+                rvol_length = st.number_input(
+                    "RVOL Length (days):", 
+                    min_value=5, 
+                    max_value=50, 
+                    value=stock_config.get('RVOL_length', 10), 
+                    step=1,
+                    help="Number of days for relative volume calculation"
+                )
+                
+                rvol_filter = st.number_input(
+                    "RVOL Filter Threshold:", 
+                    min_value=0.5, 
+                    max_value=5.0, 
+                    value=float(stock_config.get('RVOL_filter', 1.3)), 
+                    step=0.1,
+                    format="%.1f",
+                    help="Minimum relative volume multiplier (e.g., 1.3 = 130% of average volume)"
                 )
         
         with tab2:
@@ -1332,7 +1387,12 @@ def main():
                 "STOCK_SELECTION": {
                     "market_cap_min": market_cap_min,
                     "price_min": price_min,
-                    "volume_min": volume_min,
+                    "ADV_large_length": adv_large_length,
+                    "ADV_small_length": adv_small_length,
+                    "ADV_large": adv_large,
+                    "ADV_small": adv_small,
+                    "RVOL_length": rvol_length,
+                    "RVOL_filter": rvol_filter,
                     "alpha_threshold": stock_alpha_threshold,
                     "max_sector_weight": max_sector_weight,
                     "top_sectors_count": top_sectors_count

@@ -250,30 +250,43 @@ class IBTWSAPI:
             result[i] = quote
         return result
 
-    def get_volume(self, symbol: str, exchange: str = "SMART", currency: str = "USD"):
+    def get_volume(self, symbol: str, exchange: str = "SMART", currency: str = "USD", duration: str = "2 D", bar_size: str = "1 day"):
         try:
             contract = Stock(symbol, exchange, currency)
 
             bars = self.client.reqHistoricalData(
                 contract,
                 endDateTime='',
-                durationStr='2 D',          # last 2 days
-                barSizeSetting='1 day',     # daily data
+                durationStr=duration,          # last X days
+                barSizeSetting=bar_size,     # daily data
                 whatToShow='TRADES',
                 useRTH=True,                # regular trading hours only
                 formatDate=1
             )
 
-            if len(bars) < 2:
+            if len(bars) < 1:
                 print(f"Not enough data returned for {symbol}")
-                return 0
+                return pd.DataFrame()  # Return empty DataFrame
 
-            yesterday_volume = bars[-2].volume
-            return yesterday_volume
+            # Convert bars to DataFrame with date and volume
+            data = []
+            for bar in bars:
+                data.append({
+                    'date': bar.date,
+                    'volume': bar.volume,
+                    'open': bar.open,
+                    'high': bar.high,
+                    'low': bar.low,
+                    'close': bar.close
+                })
+            
+            df = pd.DataFrame(data)
+            df.set_index('date', inplace=True)
+            return df
 
         except Exception as e:
             print(f"Error fetching volume for {symbol}: {e}")
-            return 0
+            return pd.DataFrame()  # Return empty DataFrame on error
 
 
     def get_bulk_quotes(self, symbols: list, currency: str = 'USD', batch_size: int = 50, exchange: str = 'SMART'):
