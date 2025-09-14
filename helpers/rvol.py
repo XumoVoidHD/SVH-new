@@ -8,7 +8,7 @@ import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from simulation.ibkr_broker import IBTWSAPI
 
-def calc_rvol(df, days=10, current_time=None):
+def calc_rvol(df, days=10):
     """
     Calculate Relative Volume (RVOL) by comparing current day's volume so far
     with average volume for the same time period over past days.
@@ -16,7 +16,6 @@ def calc_rvol(df, days=10, current_time=None):
     Args:
         df: DataFrame with 15-min interval volume data
         days: Number of past days to use for average calculation (default: 10)
-        current_time: Current time as datetime (if None, uses latest data)
     
     Returns:
         float: Relative volume ratio (e.g., 1.5 = 150% of average)
@@ -38,11 +37,13 @@ def calc_rvol(df, days=10, current_time=None):
             print("Could not convert index to datetime")
             return 0
     
-    # Get current time (either provided or latest data time)
-    if current_time is None:
-        current_time = df.index.max()
-    else:
-        current_time = pd.to_datetime(current_time)
+    # Debug: Print timezone info
+    print(f"DataFrame timezone: {df.index.tz}")
+    print(f"DataFrame date range: {df.index.min()} to {df.index.max()}")
+    print(f"Sample index values: {df.index[:3].tolist()}")
+    
+    # Use the last entry time from the DataFrame as current time
+    current_time = df.index.max()
     
     # Get today's date
     today = current_time.date()
@@ -68,13 +69,22 @@ def calc_rvol(df, days=10, current_time=None):
     # Group by date and time to get same time period volumes for each past day
     past_days_volumes = []
     
-    for past_date in past_days_data.index.date:
+    # Get unique dates from past data
+    unique_dates = sorted(pd.Series(past_days_data.index.date).unique())
+    
+    for past_date in unique_dates:
         past_day_data = past_days_data[past_days_data.index.date == past_date]
         
         # Filter to same time period (from market open to current time)
-        # Assuming market opens at 9:30 AM
-        market_open = pd.Timestamp.combine(past_date, pd.Timestamp("09:30:00").time())
-        current_time_past = pd.Timestamp.combine(past_date, current_time_of_day)
+        # Handle timezone compatibility
+        if past_day_data.index.tz is not None:
+            # DataFrame has timezone info, create timezone-aware timestamps
+            market_open = pd.Timestamp.combine(past_date, pd.Timestamp("09:30:00").time()).tz_localize(past_day_data.index.tz)
+            current_time_past = pd.Timestamp.combine(past_date, current_time_of_day).tz_localize(past_day_data.index.tz)
+        else:
+            # DataFrame is timezone-naive, create timezone-naive timestamps
+            market_open = pd.Timestamp.combine(past_date, pd.Timestamp("09:30:00").time())
+            current_time_past = pd.Timestamp.combine(past_date, current_time_of_day)
         
         # Get volume from market open to current time for this past day
         period_data = past_day_data[
@@ -102,8 +112,8 @@ def calc_rvol(df, days=10, current_time=None):
     
     rvol = today_volume_so_far / avg_volume_same_period
     
-    print(f"Today's volume so far (until {current_time.time()}): {today_volume_so_far:,.0f}")
-    print(f"Average volume for same period over {len(past_days_volumes)} days: {avg_volume_same_period:,.0f}")
+    # print(f"Today's volume so far (until {current_time.time()}): {today_volume_so_far:,.0f}")
+    # print(f"Average volume for same period over {len(past_days_volumes)} days: {avg_volume_same_period:,.0f}")
     print(f"Relative Volume (RVOL): {rvol:.2f} ({rvol*100:.1f}% of average)")
     
     return rvol
@@ -114,16 +124,11 @@ if __name__ == "__main__":
     broker.connect()
     # Get 15-minute interval data for past 10 days
     start = time.time()
-    df = broker.get_volume(symbol="AAPL", duration="1 D", bar_size="1 hour")
+    df = broker.get_volume(symbol="TSLA", duration="10 D", bar_size="15 mins")
     print("Sample data:")
     print(df)
     end = time.time()
     print(f"Time taken: {end - start} seconds")
-    # # Calculate RVOL (will use latest time as current time)
-    # rvol = calc_rvol(df, days=10)
-    
-    # # Example with specific current time (10:00 AM)
-    # from datetime import datetime
-    # current_time = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
-    # rvol_10am = calc_rvol(df, days=10, current_time=current_time)
+    # Calculate RVOL using the last entry time as current time
+    rvol = calc_rvol(df, days=10)
     

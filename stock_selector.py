@@ -6,6 +6,7 @@ from simulation.ibkr_broker import IBTWSAPI
 import json
 from types import SimpleNamespace
 from helpers.adv import calc_adv
+from helpers.rvol import calc_rvol
 
 def load_config(json_file='creds.json'):
     """Load configuration from JSON file and make it accessible like a module"""
@@ -66,18 +67,20 @@ class StockSelector:
             adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
         
             if adv_large >= self.volume_filter_ADV_large_filter and adv_small >= self.volume_filter_ADV_small_filter:
-                result[symbol] = {
-                    "symbol": symbol,
-                    "price": price,
-                    "adv_large": adv_large,
-                    "adv_small": adv_small
-                }
-                print(f"Added {symbol} to result")
+                volume_df_rvol = self.client.get_volume(symbol=symbol, duration=f"{self.rvol_length} D", bar_size="15 mins")
+                rvol = calc_rvol(volume_df_rvol, days=self.rvol_length)
+                
+                if rvol >= self.rvol_filter:
+                    result[symbol] = {
+                        "symbol": symbol,
+                        "price": price,
+                        "adv_large": adv_large,
+                        "adv_small": adv_small,
+                        "rvol": rvol
+                    }
+
             else:
                 continue
-            volume_df_rvol = self.client.get_volume(symbol=symbol, duration=f"{self.rvol_length} D", bar_size="15 mins")
-
-
         return result
 
     def filter_by_price_volume(self):
