@@ -4,6 +4,9 @@ from collections import defaultdict
 import yfinance as yf
 from simulation.ibkr_broker import IBTWSAPI
 import json
+import pickle
+import os
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from helpers.adv import calc_adv
 from helpers.rvol import calc_rvol
@@ -33,9 +36,9 @@ class StockSelector:
         self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
         self.price_filter = creds.STOCK_SELECTION.price_min
         self.volume_filter_ADV_large_filter = creds.STOCK_SELECTION.ADV_large
-        self.volume_filter_ADV_large_length = creds.STOCK_SELECTION.ADV_large_length
+        self.volume_filter_ADV_large_length = creds.STOCK_SELECTION.ADV_large_length + 1 
         self.volume_filter_ADV_small_filter = creds.STOCK_SELECTION.ADV_small
-        self.volume_filter_ADV_small_length = creds.STOCK_SELECTION.ADV_small_length
+        self.volume_filter_ADV_small_length = creds.STOCK_SELECTION.ADV_small_length + 1
         self.rvol_filter = creds.STOCK_SELECTION.RVOL_filter
         self.rvol_length = creds.STOCK_SELECTION.RVOL_length
         # self.client = SchwabBroker()
@@ -48,13 +51,186 @@ class StockSelector:
         self.qualified = []
         self.sector_returns = defaultdict(list)
         self.top_sectors = []
+        
+        # RVOL data caching
+        self.rvol_cache_file = "rvol_cache.pkl"
+        self.rvol_data_cache = {}
+        
+        # ADV data caching
+        self.adv_cache_file = "adv_cache.pkl"
+        self.adv_data_cache = {}
 
     def load_and_filter_market_cap(self):
         df = pd.read_csv(self.csv_path)
         df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
         df = df[df["marketcap"] > self.market_cap_filter]
         self.symbols = df["Symbol"].tolist()
+        
         print(f"Loaded {len(self.symbols)} symbols with market cap > {self.market_cap_filter}")
+        
+        # Pre-fetch and cache RVOL and ADV data for all symbols
+        self._cache_rvol_data()
+        self._cache_adv_data()
+
+    def _cache_rvol_data(self):
+        """Pre-fetch and cache RVOL historical data for all symbols"""
+        print(f"Pre-fetching RVOL data for {len(self.symbols)} symbols...")
+        
+        # Check if cache file exists and is recent (less than 1 day old)
+        if os.path.exists(self.rvol_cache_file):
+            cache_time = datetime.fromtimestamp(os.path.getmtime(self.rvol_cache_file))
+            if datetime.now() - cache_time < timedelta(days=1):
+                print("Loading existing RVOL cache...")
+                self._load_rvol_cache()
+                return
+        
+        # Fetch historical data for all symbols
+        start_time = time.time()
+        for i, symbol in enumerate(self.symbols):
+            try:
+                print(f"Fetching RVOL data for {symbol} ({i+1}/{len(self.symbols)})")
+                # Fetch historical data (excluding today)
+                historical_df = self.client.get_volume(
+                    symbol=symbol, 
+                    duration=f"{self.rvol_length + 1} D",  # +1 to account for excluding today
+                    bar_size="15 mins"
+                )
+                
+                if not historical_df.empty:
+                    # Remove last entry (today's incomplete data)
+                    historical_df = historical_df.iloc[:-1]
+                    self.rvol_data_cache[symbol] = historical_df
+                    
+            except Exception as e:
+                print(f"Error fetching data for {symbol}: {e}")
+                continue
+        
+        # Save cache to file
+        self._save_rvol_cache()
+        
+        end_time = time.time()
+        print(f"RVOL data caching completed in {end_time - start_time:.2f} seconds")
+        print(f"Cached data for {len(self.rvol_data_cache)} symbols")
+
+    def _save_rvol_cache(self):
+        """Save RVOL data cache to file"""
+        try:
+            with open(self.rvol_cache_file, 'wb') as f:
+                pickle.dump(self.rvol_data_cache, f)
+            print(f"RVOL cache saved to {self.rvol_cache_file}")
+        except Exception as e:
+            print(f"Error saving RVOL cache: {e}")
+
+    def _load_rvol_cache(self):
+        """Load RVOL data cache from file"""
+        try:
+            with open(self.rvol_cache_file, 'rb') as f:
+                self.rvol_data_cache = pickle.load(f)
+            print(f"Loaded RVOL cache with {len(self.rvol_data_cache)} symbols")
+        except Exception as e:
+            print(f"Error loading RVOL cache: {e}")
+            self.rvol_data_cache = {}
+
+    def _get_rvol_data_with_today(self, symbol):
+        """Get RVOL data by combining cached historical data with today's data"""
+        if symbol not in self.rvol_data_cache:
+            print(f"No cached data for {symbol}")
+            return None
+        
+        try:
+            # Get today's data
+            today_df = self.client.get_volume(
+                symbol=symbol,
+                duration="1 D",
+                bar_size="15 mins"
+            )
+            
+            if today_df.empty:
+                print(f"No today's data for {symbol}")
+                return self.rvol_data_cache[symbol]
+            
+            # Get historical data and remove any existing today's data
+            historical_df = self.rvol_data_cache[symbol].copy()
+            today_date = today_df.index.max().date()
+            
+            # Remove any data from today that might already be in historical data
+            historical_df = historical_df[historical_df.index.date < today_date]
+            
+            # Combine historical data with today's data
+            combined_df = pd.concat([historical_df, today_df], ignore_index=False)
+            
+            return combined_df
+            
+        except Exception as e:
+            print(f"Error getting today's data for {symbol}: {e}")
+            return self.rvol_data_cache[symbol]
+
+    def _cache_adv_data(self):
+        """Pre-fetch and cache ADV historical data for all symbols"""
+        print(f"Pre-fetching ADV data for {len(self.symbols)} symbols...")
+        
+        # Check if cache file exists and is recent (less than 1 day old)
+        if os.path.exists(self.adv_cache_file):
+            cache_time = datetime.fromtimestamp(os.path.getmtime(self.adv_cache_file))
+            if datetime.now() - cache_time < timedelta(days=1):
+                print("Loading existing ADV cache...")
+                self._load_adv_cache()
+                return
+        
+        # Fetch historical data for all symbols
+        start_time = time.time()
+        for i, symbol in enumerate(self.symbols):
+            try:
+                print(f"Fetching ADV data for {symbol} ({i+1}/{len(self.symbols)})")
+                # Fetch historical data (excluding today)
+                historical_df = self.client.get_volume(
+                    symbol=symbol, 
+                    duration=f"{max(self.volume_filter_ADV_large_length, self.volume_filter_ADV_small_length) + 1} D",  # +1 to account for excluding today
+                    bar_size="1 day"
+                )
+                
+                if not historical_df.empty:
+                    # Remove last entry (today's incomplete data)
+                    historical_df = historical_df.iloc[:-1]
+                    self.adv_data_cache[symbol] = historical_df
+                    
+            except Exception as e:
+                print(f"Error fetching ADV data for {symbol}: {e}")
+                continue
+        
+        # Save cache to file
+        self._save_adv_cache()
+        
+        end_time = time.time()
+        print(f"ADV data caching completed in {end_time - start_time:.2f} seconds")
+        print(f"Cached ADV data for {len(self.adv_data_cache)} symbols")
+
+    def _save_adv_cache(self):
+        """Save ADV data cache to file"""
+        try:
+            with open(self.adv_cache_file, 'wb') as f:
+                pickle.dump(self.adv_data_cache, f)
+            print(f"ADV cache saved to {self.adv_cache_file}")
+        except Exception as e:
+            print(f"Error saving ADV cache: {e}")
+
+    def _load_adv_cache(self):
+        """Load ADV data cache from file"""
+        try:
+            with open(self.adv_cache_file, 'rb') as f:
+                self.adv_data_cache = pickle.load(f)
+            print(f"Loaded ADV cache with {len(self.adv_data_cache)} symbols")
+        except Exception as e:
+            print(f"Error loading ADV cache: {e}")
+            self.adv_data_cache = {}
+
+    def _get_adv_data(self, symbol):
+        """Get cached ADV historical data (no need for today's data)"""
+        if symbol not in self.adv_data_cache:
+            print(f"No cached ADV data for {symbol}")
+            return None
+        
+        return self.adv_data_cache[symbol]
 
     def process_volume_batch(self, batch):
         result = {}
@@ -62,13 +238,52 @@ class StockSelector:
             symbol = row["Symbol"]
             price = row["price (USD)"]
 
-            volume_df_adv = self.client.get_volume(symbol=symbol, duration=f"{self.volume_filter_ADV_large_length} D", bar_size="1 day")
-            adv_large = calc_adv(volume_df_adv, days=self.volume_filter_ADV_large_length)    
-            adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
+            # Use cached ADV data (no need for today's data)
+            volume_df_adv = self._get_adv_data(symbol)
+            if volume_df_adv is not None:
+                adv_large = calc_adv(volume_df_adv, days=self.volume_filter_ADV_large_length)    
+                adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
+            else:
+                # Fallback: fetch ADV data manually if cache fails
+                print(f"No cached ADV data for {symbol}, fetching manually...")
+                try:
+                    volume_df_adv = self.client.get_volume(
+                        symbol=symbol, 
+                        duration=f"{max(self.volume_filter_ADV_large_length, self.volume_filter_ADV_small_length)} D", 
+                        bar_size="1 day"
+                    )
+                    if not volume_df_adv.empty:
+                        adv_large = calc_adv(volume_df_adv, days=self.volume_filter_ADV_large_length)    
+                        adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
+                    else:
+                        print(f"No ADV data available for {symbol} even after manual fetch")
+                        continue
+                except Exception as e:
+                    print(f"Error manually fetching ADV data for {symbol}: {e}")
+                    continue
         
             if adv_large >= self.volume_filter_ADV_large_filter and adv_small >= self.volume_filter_ADV_small_filter:
-                volume_df_rvol = self.client.get_volume(symbol=symbol, duration=f"{self.rvol_length} D", bar_size="15 mins")
-                rvol = calc_rvol(volume_df_rvol, days=self.rvol_length)
+                # Use cached RVOL data with today's data appended
+                volume_df_rvol = self._get_rvol_data_with_today(symbol)
+                if volume_df_rvol is not None:
+                    rvol = calc_rvol(volume_df_rvol, days=self.rvol_length)
+                else:
+                    # Fallback: fetch RVOL data manually if cache fails
+                    print(f"No cached RVOL data for {symbol}, fetching manually...")
+                    try:
+                        volume_df_rvol = self.client.get_volume(
+                            symbol=symbol, 
+                            duration=f"{self.rvol_length} D", 
+                            bar_size="15 mins"
+                        )
+                        if not volume_df_rvol.empty:
+                            rvol = calc_rvol(volume_df_rvol, days=self.rvol_length)
+                        else:
+                            print(f"No RVOL data available for {symbol} even after manual fetch")
+                            continue
+                    except Exception as e:
+                        print(f"Error manually fetching RVOL data for {symbol}: {e}")
+                        continue
                 
                 if rvol >= self.rvol_filter:
                     result[symbol] = {
@@ -103,11 +318,13 @@ class StockSelector:
 
         for i in all_quotes:
             self.filtered.append(all_quotes[i])
+            print(f"Added {all_quotes[i]} to filtered")
 
         # Final results
         print(f"Total quotes collected: {len(all_quotes)}")
         end_time = time.time()
         print(f"Time taken: {end_time - start_time:.2f} seconds")
+
 
         return all_quotes
         
@@ -280,5 +497,7 @@ class StockSelector:
 
 if __name__ == "__main__":
     selector = StockSelector()
-    top_sector_stocks = selector.run()
-    print(top_sector_stocks)
+    start_time = time.time()
+    top_sector_stocks = selector.load_and_filter_market_cap()
+    end_time = time.time()
+    print(f"Time taken {end_time-start_time}")
