@@ -124,7 +124,7 @@ if __name__ == "__main__":
     broker.connect()
     # Get 15-minute interval data for past 10 days
     start = time.time()
-    df = broker.get_volume(symbol="TSLA", duration="10 D", bar_size="15 mins")
+    df = broker.get_volume(symbol="NVDA", duration="1 D", bar_size="15 mins")
     print("Sample data:")
     print(df)
     end = time.time()

@@ -17,6 +17,13 @@ def calc_adv(df, days=5):
         print(f"Available columns: {list(df.columns)}")
         return 0
     
+    # Exclude the last entry from the DataFrame (most recent incomplete period)
+    if len(df) < 2:
+        print("Not enough data points - need at least 2 entries")
+        return 0
+    
+    df = df.iloc[:-1]  # Remove the last entry
+    
     # Check if index is datetime
     if not isinstance(df.index, pd.DatetimeIndex):
         print("DataFrame index is not datetime - attempting to convert")
@@ -33,10 +40,12 @@ def calc_adv(df, days=5):
     daily_df = pd.DataFrame({'volume': daily_volume})
     daily_df.index = pd.to_datetime(daily_df.index)
     
+    # Today's data is already excluded by removing the last entry above
+    
     # Take the last 'days' entries and calculate average volume
     if len(daily_df) < days:
-        print(f"Not enough daily data available. Have {len(daily_df)} days, need {days}")
-        # Use all available data if we don't have enough days
+        print(f"Not enough historical daily data available. Have {len(daily_df)} days, need {days}")
+        # Use all available historical data if we don't have enough days
         recent_data = daily_df
         actual_days = len(daily_df)
     else:
@@ -45,7 +54,7 @@ def calc_adv(df, days=5):
     
     avg_volume = recent_data['volume'].mean()
     
-    print(f"Average Daily Volume over {actual_days} days: {avg_volume:,.0f}")
+    # print(f"Average Daily Volume over {actual_days} days: {avg_volume:,.0f}")
     
     return avg_volume
 
@@ -54,6 +63,6 @@ if __name__ == "__main__":
     broker = IBTWSAPI()
     broker.connect()
     # get_volume now returns a DataFrame with all volume data
-    df = broker.get_volume(symbol="AAPL", duration="10 D", bar_size="1 day")
+    df = broker.get_volume(symbol="AAPL", duration="11 D", bar_size="1 day")
     print(df)
     calc_adv(df, days=10)
