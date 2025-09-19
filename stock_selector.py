@@ -36,9 +36,9 @@ class StockSelector:
         self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
         self.price_filter = creds.STOCK_SELECTION.price_min
         self.volume_filter_ADV_large_filter = creds.STOCK_SELECTION.ADV_large
-        self.volume_filter_ADV_large_length = creds.STOCK_SELECTION.ADV_large_length + 1 
+        self.volume_filter_ADV_large_length = creds.STOCK_SELECTION.ADV_large_length 
         self.volume_filter_ADV_small_filter = creds.STOCK_SELECTION.ADV_small
-        self.volume_filter_ADV_small_length = creds.STOCK_SELECTION.ADV_small_length + 1
+        self.volume_filter_ADV_small_length = creds.STOCK_SELECTION.ADV_small_length
         self.rvol_filter = creds.STOCK_SELECTION.RVOL_filter
         self.rvol_length = creds.STOCK_SELECTION.RVOL_length
         # self.client = SchwabBroker()
@@ -68,14 +68,12 @@ class StockSelector:
         
         print(f"Loaded {len(self.symbols)} symbols with market cap > {self.market_cap_filter}")
         
-        # Pre-fetch and cache RVOL and ADV data for all symbols
-        self._cache_rvol_data()
         self._cache_adv_data()
+        self.qualified_symbols = self._filter_symbols_by_adv_criteria()
+        self._cache_rvol_data()
 
     def _cache_rvol_data(self):
-        """Pre-fetch and cache RVOL historical data for all symbols"""
-        print(f"Pre-fetching RVOL data for {len(self.symbols)} symbols...")
-        
+
         # Check if cache file exists and is recent (less than 1 day old)
         if os.path.exists(self.rvol_cache_file):
             cache_time = datetime.fromtimestamp(os.path.getmtime(self.rvol_cache_file))
@@ -84,15 +82,15 @@ class StockSelector:
                 self._load_rvol_cache()
                 return
         
-        # Fetch historical data for all symbols
+        # Fetch historical data for qualified symbols
         start_time = time.time()
-        for i, symbol in enumerate(self.symbols):
+        for i, symbol in enumerate(self.qualified_symbols):
             try:
-                print(f"Fetching RVOL data for {symbol} ({i+1}/{len(self.symbols)})")
+                print(f"Fetching RVOL data for {symbol} ({i+1}/{len(self.qualified_symbols)})")
                 # Fetch historical data (excluding today)
                 historical_df = self.client.get_volume(
                     symbol=symbol, 
-                    duration=f"{self.rvol_length + 1} D",  # +1 to account for excluding today
+                    duration=f"{self.rvol_length + 1} D", 
                     bar_size="15 mins"
                 )
                 
@@ -133,6 +131,10 @@ class StockSelector:
 
     def _get_rvol_data_with_today(self, symbol):
         """Get RVOL data by combining cached historical data with today's data"""
+        # Load cache if not already loaded
+        if not self.rvol_data_cache:
+            self._load_rvol_cache()
+            
         if symbol not in self.rvol_data_cache:
             print(f"No cached data for {symbol}")
             return None
@@ -185,7 +187,7 @@ class StockSelector:
                 # Fetch historical data (excluding today)
                 historical_df = self.client.get_volume(
                     symbol=symbol, 
-                    duration=f"{max(self.volume_filter_ADV_large_length, self.volume_filter_ADV_small_length) + 1} D",  # +1 to account for excluding today
+                    duration=f"{max(self.volume_filter_ADV_large_length, self.volume_filter_ADV_small_length) + 5} D",
                     bar_size="1 day"
                 )
                 
@@ -204,6 +206,42 @@ class StockSelector:
         end_time = time.time()
         print(f"ADV data caching completed in {end_time - start_time:.2f} seconds")
         print(f"Cached ADV data for {len(self.adv_data_cache)} symbols")
+
+    def _filter_symbols_by_adv_criteria(self):
+
+        print(f"Filtering symbols by ADV criteria...")
+        
+        qualified_symbols = []
+        start_time = time.time()
+        
+        for i, symbol in enumerate(self.symbols):
+            try:
+                print(f"Checking ADV criteria for {symbol} ({i+1}/{len(self.symbols)})")
+                
+                # Get cached ADV data
+                volume_df_adv = self._get_adv_data(symbol)
+                if volume_df_adv is not None:
+                    adv_large = calc_adv(volume_df_adv, days=self.volume_filter_ADV_large_length)    
+                    adv_small = calc_adv(volume_df_adv, days=self.volume_filter_ADV_small_length)
+                    
+                    # Check if symbol passes ADV criteria
+                    if adv_large >= self.volume_filter_ADV_large_filter and adv_small >= self.volume_filter_ADV_small_filter:
+                        qualified_symbols.append(symbol)
+                        print(f"{symbol} passed ADV criteria (Large: {adv_large:,.0f}, Small: {adv_small:,.0f})")
+                    else:
+                        print(f"{symbol} failed ADV criteria (Large: {adv_large:,.0f}, Small: {adv_small:,.0f})")
+                else:
+                    print(f"{symbol} - No ADV data available")
+                    
+            except Exception as e:
+                print(f"Error checking ADV criteria for {symbol}: {e}")
+                continue
+        
+        end_time = time.time()
+        print(f"ADV filtering completed in {end_time - start_time:.2f} seconds")
+        print(f"{len(qualified_symbols)} symbols passed ADV criteria out of {len(self.symbols)} total symbols")
+        
+        return qualified_symbols
 
     def _save_adv_cache(self):
         """Save ADV data cache to file"""
@@ -226,6 +264,10 @@ class StockSelector:
 
     def _get_adv_data(self, symbol):
         """Get cached ADV historical data (no need for today's data)"""
+        # Load cache if not already loaded
+        if not self.adv_data_cache:
+            self._load_adv_cache()
+            
         if symbol not in self.adv_data_cache:
             print(f"No cached ADV data for {symbol}")
             return None
@@ -488,7 +530,7 @@ class StockSelector:
             return [], []
 
         top_df = pd.DataFrame(top_sector_stocks).sort_values(by="alpha_5d", ascending=False)
-        top_df.to_csv("filtered_top_sectors.csv", index=False)
+        # top_df.to_csv("filtered_top_sectors.csv", index=False)
 
         end_time = time.time()
         print(f"\nTime Taken: {end_time - start_time:.2f} seconds")

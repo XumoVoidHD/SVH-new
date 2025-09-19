@@ -9,17 +9,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from simulation.ibkr_broker import IBTWSAPI
 
 def calc_rvol(df, days=10):
-    """
-    Calculate Relative Volume (RVOL) by comparing current day's volume so far
-    with average volume for the same time period over past days.
-    
-    Args:
-        df: DataFrame with 15-min interval volume data
-        days: Number of past days to use for average calculation (default: 10)
-    
-    Returns:
-        float: Relative volume ratio (e.g., 1.5 = 150% of average)
-    """
     if df is None or df.empty:
         print("No data provided")
         return 0
@@ -38,9 +27,9 @@ def calc_rvol(df, days=10):
             return 0
     
     # Debug: Print timezone info
-    print(f"DataFrame timezone: {df.index.tz}")
-    print(f"DataFrame date range: {df.index.min()} to {df.index.max()}")
-    print(f"Sample index values: {df.index[:3].tolist()}")
+    # print(f"DataFrame timezone: {df.index.tz}")
+    # print(f"DataFrame date range: {df.index.min()} to {df.index.max()}")
+    # print(f"Sample index values: {df.index[:3].tolist()}")
     
     # Use the last entry time from the DataFrame as current time
     current_time = df.index.max()

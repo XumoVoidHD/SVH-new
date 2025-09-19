@@ -26,7 +26,7 @@ def calc_adv(df, days=5):
     
     # Check if index is datetime
     if not isinstance(df.index, pd.DatetimeIndex):
-        print("DataFrame index is not datetime - attempting to convert")
+        # print("DataFrame index is not datetime - attempting to convert")
         try:
             df.index = pd.to_datetime(df.index)
         except:

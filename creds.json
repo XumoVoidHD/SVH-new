@@ -1,5 +1,5 @@
 {
-    "EQUITY": 1000000,
+    "EQUITY": 100000,
     "TESTING": true,
     "VWAP_SHOULD_BE_BELOW_PRICE": true,
     "STOCK_SELECTION": {
@@ -203,15 +203,15 @@
         "margin_alert_threshold": 1.5
     },
     "ORDER_CONFIG": {
-        "limit_offset_min": 3e-05,
-        "limit_offset_max": 7e-05,
+        "limit_offset_min": 4e-05,
+        "limit_offset_max": 8e-05,
         "order_window": 60
     },
     "TRADING_HOURS": {
         "market_open": "09:30",
         "market_close": "16:00",
-        "timezone": "America/Chicago",
-        "morning_entry_start": "10:00",
+        "timezone": "US/Eastern",
+        "morning_entry_start": "9:00",
         "morning_entry_end": "11:15",
         "afternoon_entry_start": "13:30",
         "afternoon_entry_end": "14:30"

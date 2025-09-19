@@ -4,7 +4,7 @@ from stock_selector import StockSelector
 import random
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, time as dtime
 import pytz
 from helpers import vwap, ema, macd, adx, atr
 from helpers.fetch_marketcap_csv import fetch_marketcap_csv
@@ -25,8 +25,8 @@ def load_config(json_file='creds.json'):
         if isinstance(d, dict):
             return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
         elif isinstance(d, list):
-            # Keep lists as lists, but convert their items if they're dicts
-            return [dict_to_obj(item) if isinstance(item, dict) else item for item in d]
+            # Keep lists as lists, but preserve dicts as dicts (don't convert to SimpleNamespace)
+            return [item for item in d]  # Keep original items as-is
         else:
             return d
     
@@ -59,8 +59,8 @@ class Strategy:
         
         self.data = {}
         self.indicators = {}
-        self.position_active = False
-        self.position_shares = 0
+        self.position_active = True 
+        self.position_shares = 5
         self.current_price = 0
         self.entry_price = 0
         self.stop_loss_price = 0
@@ -99,9 +99,19 @@ class Strategy:
         afternoon_start = self.trading_hours.afternoon_entry_start
         afternoon_end = self.trading_hours.afternoon_entry_end
         
+        # Convert time strings to datetime objects for proper comparison
+        def time_str_to_datetime(time_str):
+            return datetime.strptime(time_str, "%H:%M").time()
+        
+        current_time_obj = time_str_to_datetime(current_time_str)
+        morning_start_obj = time_str_to_datetime(morning_start)
+        morning_end_obj = time_str_to_datetime(morning_end)
+        afternoon_start_obj = time_str_to_datetime(afternoon_start)
+        afternoon_end_obj = time_str_to_datetime(afternoon_end)
+        
         # Check if current time is in either window
-        in_morning_window = morning_start <= current_time_str <= morning_end
-        in_afternoon_window = afternoon_start <= current_time_str <= afternoon_end
+        in_morning_window = morning_start_obj <= current_time_obj <= morning_end_obj
+        in_afternoon_window = afternoon_start_obj <= current_time_obj <= afternoon_end_obj
         
         return in_morning_window or in_afternoon_window
     
@@ -265,7 +275,7 @@ class Strategy:
             
             print(f"Executing {hedge_level} hedge:")
             print(f"  - Hedge amount: ${hedge_amount:,.0f} ({beta*100:.1f}% of equity)")
-            print(f"  - {self.hedge_symbol} price: ${trade['avgFillPrice']}")
+            print(f"  - {self.hedge_symbol} price: ${trade[1]}")
             print(f"  - Shares to short: {hedge_shares}")
             
             # Update hedge status and track hedge position
@@ -279,7 +289,7 @@ class Strategy:
                 hedge_symbol=self.hedge_symbol,
                 hedge_level=hedge_level,
                 hedge_beta=beta,
-                hedge_entry_price=trade['avgFillPrice'],
+                hedge_entry_price=trade[1],
                 hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
             )
             
@@ -352,7 +362,8 @@ class Strategy:
             print(f"3:30 PM: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
     
     def safety_exit_all(self):
-        """Safety exit all positions at 3:35 PM"""
+        
+        print("Safety exit all positions at 3:35 PM")
         if self.position_active:
             print("3:35 PM Safety Exit: Closing all positions")
             self.close_position('safety_exit', self.position_shares)
@@ -747,16 +758,19 @@ class Strategy:
                     print(f"Unable to place order for {self.stock}")
                     return
                 else:
+                    if trade[2] != shares:
+                        print(f"Order partially filled for {self.stock}: {trade}")
+                    shares = trade[2]
                     print(f"Order placed for {self.stock}: {trade}")
                     with self.manager.manager_lock:
-                        self.used_capital += shares * trade['avgFillPrice']
-                        self.used_margin = shares * trade['avgFillPrice']
+                        self.used_capital += shares * trade[1]
+                        self.used_margin = shares * trade[1]
                         print(f"Used Margin: ${self.used_margin:.2f}")
                         print(f"Used Capital: ${self.used_capital:.2f}")
 
-                    self.entry_price = trade['avgFillPrice']
+                    self.entry_price = trade[1]
                     self.stop_loss_price = stop_loss
-                    self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0].gain)  # Use 1% from profit booking levels
+                    self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
                     self.position_shares = shares
                     self.position_active = True
                     self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
@@ -765,9 +779,9 @@ class Strategy:
 
                     central_tz = pytz.timezone('America/Chicago')
                     self.entry_time = datetime.now(central_tz)
-                    self.current_price = trade['avgFillPrice']
-                    self.unrealized_pnl = 0.0
-                    self.realized_pnl = 0.0
+                    self.current_price = trade[1]
+                    # self.unrealized_pnl = 0.0
+                    # self.realized_pnl = 0.0
                     print(f"Position tracking initialized for {self.stock}:")
                     print(f"  - Entry Price: ${self.entry_price:.2f}")
                     print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
@@ -798,17 +812,16 @@ class Strategy:
         while True:
             # Check for end-of-day exit times
             central_tz = pytz.timezone(self.trading_hours.timezone)
-            current_time = datetime.now(central_tz)
-            current_time_str = current_time.strftime("%H:%M")
-            
-            # 3:30 PM - Systematic close of weak positions
-            if current_time_str == "15:30":
+            current_time = datetime.now(central_tz).time()
+
+            if current_time >= dtime(15, 30) and current_time < dtime(15, 35):
                 self.end_of_day_weak_exit()
-            
-            # 3:35 PM - Safety exit all positions
-            elif current_time_str == "15:35":
+                break
+
+            elif current_time >= dtime(15, 35):
                 self.safety_exit_all()
-            
+                break
+                        
             # # 4:00 PM - Market-on-close for any remaining positions
             # elif current_time_str >= self.trading_hours.market_close:
             #     self.market_on_close_exit()
@@ -832,7 +845,7 @@ class Strategy:
                 
                 # Sleep for a bit before next iteration if no active position
                 if not self.position_active:
-                    time.sleep(60*3)  # Wait 3 minutes before checking again
+                    time.sleep(60*3)
             else:
                 self.calculate_indicators()
                 self.process_score()
@@ -1016,7 +1029,7 @@ class Strategy:
             print(f"Unable to place order for {self.stock}")
             return
         # Update remaining shares
-        realized_pnl = (trade['avgFillPrice'] - self.entry_price) * shares_to_sell
+        realized_pnl = (trade[1] - self.entry_price) * shares_to_sell
         self.position_shares -= shares_to_sell
 
         if self.position_shares <= 0:
@@ -1065,7 +1078,7 @@ class Strategy:
             print(f"Partial position closed. Remaining shares: {self.position_shares}")
             
             # Update unrealized PnL for remaining position
-            self.unrealized_pnl = (trade['avgFillPrice'] - self.entry_price) * self.position_shares
+            self.unrealized_pnl = (trade[1] - self.entry_price) * self.position_shares
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
@@ -1176,7 +1189,20 @@ class Strategy:
             try:
                 # Monitor position
                 self.monitor_position()
-                
+
+                central_tz = pytz.timezone(self.trading_hours.timezone)
+                current_time = datetime.now(central_tz).time()
+
+                if current_time >= dtime(15, 30) and current_time < dtime(15, 35):
+                    print("Weak Exit")
+                    self.end_of_day_weak_exit()
+                    break
+
+                elif current_time >= dtime(15, 35):
+                    print("All exit")
+                    self.safety_exit_all()
+                    break
+
                 time.sleep(10)
                 
             except KeyboardInterrupt:
@@ -1454,21 +1480,9 @@ class StrategyManager:
         self.used_capital = 0
         self.realized_pnl = 0
         self.unrealized_pnl = 0
-        
+        self.stocks_list, self.stocks_dict = [], []
         # Create stop event BEFORE starting the thread
         self.stop_event = threading.Event()
-
-        try:
-            # self.stocks_list, self.stocks_dict = self.selector.run()
-            self.stocks_list = ["NTNX"] # , "APP", "COHR"]
-            # self.stocks_dict = []
-            print(f"Stock selector returned {len(self.stocks_list)} stocks")
-        except Exception as e:
-            print(f"Error in stock selector: {e}")
-            # Fallback to a default list
-            self.stocks_list = ["AAPL"]
-            self.stocks_dict = []
-        # self.stocks_list = ["AAPL", "MSFT", "NVDA"]
         
         # Add XLF to database for hedging - all threads can use it
         hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
@@ -1526,9 +1540,62 @@ class StrategyManager:
                     print(f"Error in drawdown monitoring: {e}")
                     time.sleep(5)
 
+    def is_entry_time_window(self):
+        """Check if current time is within entry time windows"""
+        # Get current time in USA Eastern Time
+        eastern_tz = pytz.timezone(self.config.TRADING_HOURS.timezone)
+        current_time = datetime.now(eastern_tz)
+        current_time_str = current_time.strftime("%H:%M")
+        
+        # Get entry windows from configuration
+        morning_start = self.config.TRADING_HOURS.morning_entry_start
+        morning_end = self.config.TRADING_HOURS.morning_entry_end
+        afternoon_start = self.config.TRADING_HOURS.afternoon_entry_start
+        afternoon_end = self.config.TRADING_HOURS.afternoon_entry_end
+        
+        # Convert time strings to datetime objects for proper comparison
+        def time_str_to_datetime(time_str):
+            return datetime.strptime(time_str, "%H:%M").time()
+        
+        current_time_obj = time_str_to_datetime(current_time_str)
+        morning_start_obj = time_str_to_datetime(morning_start)
+        morning_end_obj = time_str_to_datetime(morning_end)
+        afternoon_start_obj = time_str_to_datetime(afternoon_start)
+        afternoon_end_obj = time_str_to_datetime(afternoon_end)
+        
+        # Check if current time is in either window
+        in_morning_window = morning_start_obj <= current_time_obj <= morning_end_obj
+        in_afternoon_window = afternoon_start_obj <= current_time_obj <= afternoon_end_obj
+        
+        return in_morning_window or in_afternoon_window
+
     def run(self):
         self.threads = []
         self.strategies = []
+        
+        # Wait for entry time window before running stock selection
+        print("Waiting for entry time window to begin stock selection...")
+        while not self.is_entry_time_window() and not self.config.TESTING:
+            eastern_tz = pytz.timezone(self.config.TRADING_HOURS.timezone)
+            current_time = datetime.now(eastern_tz)
+            current_time_str = current_time.strftime("%H:%M")
+            print(f"Current time: {current_time_str} - Not in entry window, waiting...")
+            time.sleep(60)  # Check every minute
+        
+        print("Entry time window detected! Starting stock selection...")
+        
+        # Only run stock selection when in entry time window
+        try:
+            self.stocks_list, self.stocks_dict = self.selector.run()
+            # self.stocks_list = ["AAPL"]
+            # self.stocks_dict = []
+            print(f"Stock selector returned {len(self.stocks_list)} stocks")
+        except Exception as e:
+            print(f"Error in stock selector: {e}")
+            # Fallback to a default list
+            self.stocks_list = ["AAPL"]
+            self.stocks_dict = []
+
         print("Start")
         for i, stock in enumerate(self.stocks_list):
             print(f"{i}:{stock} ")
@@ -1585,8 +1652,8 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
-    fetch_marketcap_csv()
+    # fetch_marketcap_csv()
     manager = StrategyManager()
-    manager.test()
+    manager.run()
     print("STOPPING MANAGER")
     

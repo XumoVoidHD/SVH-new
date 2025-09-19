@@ -493,5 +493,78 @@ class IBTWSAPI:
             # self.place_market_order(contract=contract, qty=quantity, side=action)
             print(f"Closing position: {action} {quantity} {position.contract.localSymbol} at market")
 
+    def close_all_positions(self, reason="manual_close"):
+        """Close all open positions"""
+        print(f"\n=== CLOSING ALL POSITIONS ({reason}) ===")
+        
+        # First cancel all open orders
+        print("Cancelling all open orders...")
+        self.close_all_open_orders()
+        
+        # Get all positions
+        positions = self.get_positions()
+        if not positions:
+            print("No open positions found")
+            return 0, 0.0
+        
+        closed_count = 0
+        total_pnl = 0.0
+        
+        print(f"Found {len(positions)} open positions")
+        
+        for position in positions:
+            try:
+                symbol = position.contract.symbol
+                current_position = position.position
+                
+                if current_position == 0:
+                    continue
+                
+                print(f"Closing position for {symbol}: {current_position} shares")
+                
+                # Determine action based on position
+                if current_position > 0:
+                    # Long position - sell to close
+                    action = "SELL"
+                    quantity = current_position
+                else:
+                    # Short position - buy to close
+                    action = "BUY"
+                    quantity = abs(current_position)
+                
+                # Create market order to close position
+                if hasattr(position.contract, 'symbol'):
+                    # Stock position
+                    contract = Stock(symbol, self.exchange, self.currency)
+                else:
+                    # Use existing contract
+                    contract = position.contract
+                
+                # Place market order
+                order = MarketOrder(action, quantity)
+                trade = self.client.placeOrder(contract, order)
+                
+                print(f"Order placed: {action} {quantity} shares of {symbol}")
+                
+                # Wait for fill
+                self.client.sleep(2)
+                
+                closed_count += 1
+                
+            except Exception as e:
+                print(f"Error closing position for {symbol}: {e}")
+                continue
+        
+        print(f"\n=== CLOSURE SUMMARY ===")
+        print(f"Positions closed: {closed_count}")
+        print(f"Total P&L: ${total_pnl:.2f}")
+        print("=" * 50)
+        
+        return closed_count, total_pnl
+
+if __name__ == "__main__":
+    broker = IBTWSAPI()
+    broker.connect()
+    broker.close_all_positions()
 
 

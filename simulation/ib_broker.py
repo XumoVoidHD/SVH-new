@@ -182,7 +182,7 @@ class IBBroker(EWrapper, EClient):
         self.placeOrder(order_id, contract, order)
         
         # Wait for fill
-        for _ in range(60):
+        for _ in range(120):
             time.sleep(1)
             with self.lock:
                 if order_id in self.order_status:
@@ -197,7 +197,6 @@ class IBBroker(EWrapper, EClient):
 
     def place_limit_order_with_id(self, symbol, quantity, limit_price, action, order_id):
         """Place limit order with specific order ID"""
-        # Ensure quantity is an integer to avoid fractional share errors
         quantity = int(quantity)
         print(f"Limit order: {symbol} {action} {quantity} shares at ${limit_price:.2f}")
         
@@ -212,19 +211,36 @@ class IBBroker(EWrapper, EClient):
         
         self.placeOrder(order_id, contract, order)
         
-        # Wait for fill
+        # Wait for fill or partial fill
         for _ in range(60):
             time.sleep(1)
             with self.lock:
                 if order_id in self.order_status:
                     status = self.order_status[order_id].get('status', '')
+                    filled = self.order_status[order_id].get('filled', 0)
+                    avg_price = self.order_status[order_id].get('avgFillPrice', 0)
+
                     if status == 'Filled':
-                        fill_price = self.order_status[order_id].get('avgFillPrice', 0)
-                        return order_id, fill_price
+                        return order_id, avg_price, filled
                     elif status in ['Cancelled', 'Rejected']:
-                        return order_id, -1
+                        if filled > 0:
+                            return order_id, avg_price, filled
+                        else:
+                            return order_id, -1, avg_price
         
-        return order_id, -1
+        self.cancel_order(order_id)
+        
+        with self.lock:
+            if order_id in self.order_status:
+                filled = self.order_status[order_id].get('filled', 0)
+                avg_price = self.order_status[order_id].get('avgFillPrice', 0)
+                if filled > 0:
+                    return order_id, avg_price, filled
+                else:
+                    return order_id, -1, avg_price
+        
+        return order_id, 0, -1
+
 
     def cancel_order(self, order_id):
         """Cancel an order by order ID"""

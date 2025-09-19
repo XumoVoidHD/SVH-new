@@ -9,6 +9,9 @@ __pycache__/
 
 # Database files
 *.db
+*.pkl
+fole.py
+*.csv
 
 # CSV data files
 companies_by_marketcap.csv
