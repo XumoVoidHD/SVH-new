@@ -1,21 +1,24 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 import json
 import os
 from streamlit_autorefresh import st_autorefresh
 from helpers.deldb import rename_to_creation_date
+from db.trades_db import trades_db
+import subprocess
+import sys
 
 # Page configuration
 st.set_page_config(
-    page_title="SVH Trading Dashboard",
+    page_title="SVH Dashboard",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("SVH Trading Dashboard")
+st.title("SVH Dashboard")
 st.markdown("Configuration editor and database viewer for your trading system")
 st.markdown("---")
 
@@ -61,6 +64,18 @@ def load_config():
                     "daily_drawdown_limit": 0.02,
                     "monthly_drawdown_limit": 0.08,
                     "drawdown_alert": 0.015
+                },
+                "TRADING_HOURS": {
+                    "market_open": "09:30",
+                    "market_close": "16:00",
+                    "timezone": "US/Eastern",
+                    "morning_entry_start": "9:00",
+                    "morning_entry_end": "11:15",
+                    "afternoon_entry_start": "13:30",
+                    "afternoon_entry_end": "14:30",
+                    "weak_exit_time": "15:30",
+                    "hedge_force_exit_time": "15:55",
+                    "safety_exit_time": "15:55"
                 }
             }
             save_config(default_config)
@@ -114,221 +129,1040 @@ def main():
     # Sidebar for navigation
     page = st.sidebar.selectbox(
         "Select Page",
-        ["Database Viewer", "Configuration Editor", "Raw Configuration"]
+        ["Database Viewer", "Historical Data", "Configuration Editor", "Raw Configuration"]
     )
     
     if page == "Database Viewer":
         st.header("Database Viewer")
         
-        # Database management buttons
-        col1, col2, col3 = st.columns(3)
+        # Create tabs for different database views
+        tab1, tab2 = st.tabs(["Simplified DB", "Raw Database"])
         
-        with col1:
-            if st.button("Refresh Data", type="primary"):
-                st.rerun()
-        
-        with col2:
-            if st.button("Start", type="primary", help="Run main.py to start the trading system"):
-                try:
-                    import subprocess
-                    import sys
-                    import os
-                    
-                    # Get the current directory
-                    current_dir = os.getcwd()
-                    main_py_path = os.path.join(current_dir, "main.py")
-                    
-                    if os.path.exists(main_py_path):
-                        # Open main.py in a new terminal window/process
-                        if os.name == 'nt':  # Windows
-                            # Use a simpler approach for Windows to avoid path issues
-                            subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
-                                           shell=True, cwd=current_dir)
-                        else:  # Linux/Mac
-                            subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
-                                           cwd=current_dir)
-                        
-                    else:
-                        st.error("❌ main.py not found!")
-                        
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-        
-        with col3:
-            if st.button("Clear Database", type="secondary", help="Clear the database by calling rename_to_creation_date function"):
-                try:
-                    # Call the rename_to_creation_date function
-                    result = rename_to_creation_date()
-                        
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
-        
-        # Connect to database
-        conn = get_db_connection()
-        if not conn:
-            st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
-            return
-        
-        # Check if stock_strategies table exists
-        table_info = get_table_info(conn)
-        if 'stock_strategies' not in table_info:
-            st.error("❌ The 'stock_strategies' table does not exist in the database.")
-            st.info("💡 This usually means the database hasn't been properly initialized. Try running the main trading application first.")
-            conn.close()
-            return
-        
-        # Get data from stock_strategies table (main table in trades.db)
-        data, column_names = get_all_data(conn, 'stock_strategies')
-        
-        if data:
-            # Convert to DataFrame and display
-            df = pd.DataFrame(data, columns=column_names)
+        with tab1:
+            st.subheader("Simplified DB View")
             
-            # Fix data type issues for Streamlit compatibility
-            # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
-            datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
-            for col in datetime_columns:
-                if col in df.columns:
+            # Database management buttons
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                if st.button("Refresh Data", type="primary"):
+                    st.rerun()
+            
+            with col2:
+                if st.button("Start", type="primary", help="Run main.py to start the trading system"):
                     try:
-                        df[col] = pd.to_datetime(df[col], errors='coerce')
-                    except Exception:
-                        # If conversion fails, keep as string but clean it
-                        df[col] = df[col].astype(str)
+                        
+                        # Get the current directory
+                        current_dir = os.getcwd()
+                        main_py_path = os.path.join(current_dir, "main.py")
+                        
+                        if os.path.exists(main_py_path):
+                            # Open main.py in a new terminal window/process
+                            if os.name == 'nt':  # Windows
+                                # Use a simpler approach for Windows to avoid path issues
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
+                                            shell=True, cwd=current_dir)
+                            else:  # Linux/Mac
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
+                                            cwd=current_dir)
+                            
+                        else:
+                            st.error("❌ main.py not found!")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
             
-            # Convert boolean columns from bytes/ints to proper booleans
-            boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
-            for col in boolean_columns:
-                if col in df.columns:
-                    # Convert bytes/ints to boolean
-                    df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
+            with col3:
+                if st.button("Save Database", type="secondary", help="Backup the current database", key="save_db_raw"):
+                    try:
+                        result = trades_db.backup_database()
+                        if result:
+                            st.success("✅ Database backed up successfully!")
+                        else:
+                            st.error("❌ Failed to backup database")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
             
-            # Convert numeric columns to proper types
-            numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
-                              'take_profit_price', 'used_margin', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
-                              'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
-            for col in numeric_columns:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            with col4:
+                if st.button("Clear Database", type="secondary", help="Delete the database file", key="clear_db_raw"):
+                    try:
+                        if os.path.exists('trades.db'):
+                            # Close any existing connections first
+                            try:
+                                conn = get_db_connection()
+                                if conn:
+                                    conn.close()
+                            except:
+                                pass
+                            
+                            # Wait a moment for connections to close
+                            import time
+                            time.sleep(0.1)
+                            
+                            # Try to delete the file
+                            os.remove('trades.db')
+                            
+                            # Verify deletion
+                            if not os.path.exists('trades.db'):
+                                st.success("✅ Database deleted successfully!")
+                            else:
+                                st.warning("⚠️ Database file still exists - may be locked by another process")
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ Database file does not exist")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
             
-            # Add summary row for PnL if the table has unrealized_pnl column
-            if 'unrealized_pnl' in df.columns:
-                # Calculate totals
-                total_unrealized_pnl = df['unrealized_pnl'].sum()
-                total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
-                total_combined_pnl = total_unrealized_pnl + total_realized_pnl
+            with col5:
+                if st.button("Initialize Bot", type="secondary", help="Initialize database with market cap data", key="init_db_raw"):
+                    try:
+                        # Get the current directory
+                        current_dir = os.getcwd()
+                        stock_selector_path = os.path.join(current_dir, "stock_selector.py")
+                        
+                        if os.path.exists(stock_selector_path):
+                            # Run stock_selector.py in a new terminal window/process
+                            if os.name == 'nt':  # Windows
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', stock_selector_path], 
+                                            shell=True, cwd=current_dir)
+                            else:  # Linux/Mac
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', stock_selector_path], 
+                                            cwd=current_dir)
+                            
+                            st.success("✅ Database initialization started in new terminal!")
+                        else:
+                            st.error("❌ stock_selector.py not found!")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
+            
+            # Connect to database
+            conn = get_db_connection()
+            if not conn:
+                st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
+                return
+            
+            # Check if stock_strategies table exists
+            table_info = get_table_info(conn)
+            if 'stock_strategies' not in table_info:
+                st.error("❌ The 'stock_strategies' table does not exist in the database.")
+                st.info("💡 This usually means the database hasn't been properly initialized. Try running the main trading application first.")
+                conn.close()
+                return
+            
+            # Get data from stock_strategies table (main table in trades.db)
+            data, column_names = get_all_data(conn, 'stock_strategies')
+            
+            if data:
+                # Convert to DataFrame and display
+                df = pd.DataFrame(data, columns=column_names)
                 
-                # Display PnL metrics in a single row with 3 columns
-                col1, col2, col3 = st.columns(3)
+                # Fix data type issues for Streamlit compatibility
+                # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
+                datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
+                for col in datetime_columns:
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                        except Exception:
+                            # If conversion fails, keep as string but clean it
+                            df[col] = df[col].astype(str)
                 
-                with col1:
-                    st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                # Convert boolean columns from bytes/ints to proper booleans
+                boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+                for col in boolean_columns:
+                    if col in df.columns:
+                        # Convert bytes/ints to boolean
+                        df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
                 
-                with col2:
-                    st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                # Convert numeric columns to proper types
+                numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
+                                'take_profit_price', 'used_capital', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
+                                'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
+                for col in numeric_columns:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
-                with col3:
-                    st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
-                
-                # Display used margin below PnL metrics
-                if 'used_margin' in df.columns:
-                    total_used_margin = df['used_margin'].sum()
-                    st.metric("Total Used Margin", f"${total_used_margin:,.2f}")
-                
-                # Add stock selection statistics
-                st.markdown("---")
-                st.subheader("🎯 Stock Selection Statistics")
-                
-                # Count stocks by different criteria
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    # Market cap analysis
-                    if 'marketcap' in df.columns:
-                        large_caps = len(df[df['marketcap'] >= 2_000_000_000])
-                        st.metric("Large Cap (≥$2B)", large_caps)
-                    else:
-                        st.metric("Large Cap (≥$2B)", "N/A")
+                # Add summary row for PnL if the table has unrealized_pnl column
+                if 'unrealized_pnl' in df.columns:
+                    # Filter for active positions only
+                    active_df = df[df['position_active'] == True] if 'position_active' in df.columns else df
                     
-                    # Price analysis
-                    if 'current_price' in df.columns:
-                        high_price = len(df[df['current_price'] >= 10.0])
-                        st.metric("High Price (≥$10)", high_price)
-                    else:
-                        st.metric("High Price (≥$10)", "N/A")
-                
-                with col2:
-                    # Volume analysis (if available)
-                    if 'volume' in df.columns:
-                        high_volume = len(df[df['volume'] >= 1_000_000])
-                        st.metric("High Volume (≥1M)", high_volume)
-                    else:
-                        st.metric("High Volume (≥1M)", "N/A")
+                    # Calculate totals for active positions only
+                    total_unrealized_pnl = active_df['unrealized_pnl'].sum()
+                    total_realized_pnl = active_df['realized_pnl'].sum() if 'realized_pnl' in active_df.columns else 0
+                    total_combined_pnl = total_unrealized_pnl + total_realized_pnl
+                    active_positions = len(active_df)
                     
-                    # Alpha score analysis
-                    if 'score' in df.columns:
-                        high_alpha = len(df[df['score'] >= 85])
-                        st.metric("High Alpha (≥85)", high_alpha)
-                    else:
-                        st.metric("High Alpha (≥85)", "N/A")
-                
-                with col3:
-                    # Hedge analysis
-                    if 'hedge_active' in df.columns:
-                        hedged_stocks = len(df[df['hedge_active'] == True])
-                        st.metric("Hedged Stocks", hedged_stocks)
-                    else:
-                        st.metric("Hedged Stocks", "N/A")
+                    # Display PnL metrics in a single row with 4 columns
+                    col1, col2, col3, col4 = st.columns(4)
                     
-                    # Position analysis
-                    if 'position_active' in df.columns:
-                        active_positions = len(df[df['position_active'] == True])
+                    with col1:
+                        st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                    
+                    with col2:
+                        st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                    
+                    with col3:
+                        st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                    
+                    with col4:
                         st.metric("Active Positions", active_positions)
-                    else:
-                        st.metric("Active Positions", "N/A")
+                    
+                    # Additional metrics in a separate row
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if 'used_capital' in active_df.columns:
+                            total_used_capital = active_df['used_capital'].sum()
+                            st.metric("Total Used Capital", f"${total_used_capital:,.2f}")
+                    
+                    st.markdown("---")
                 
-                st.markdown("---")
-            
-            # Display the main data table with error handling for PyArrow serialization
-            try:
-                st.dataframe(df, use_container_width=True)
-            except Exception as e:
-                st.error(f"Error displaying DataFrame: {str(e)}")
-                st.info("Trying alternative display method...")
-                
-                # Fallback: display as text with pagination
-                st.subheader("Data Table (Alternative View)")
-                
-                # Show data in chunks to avoid overwhelming the display
-                chunk_size = 20
-                total_rows = len(df)
-                
-                if total_rows > chunk_size:
-                    page = st.selectbox(f"Select page (showing {chunk_size} rows per page):", 
-                                      range(1, (total_rows // chunk_size) + 2))
-                    start_idx = (page - 1) * chunk_size
-                    end_idx = min(start_idx + chunk_size, total_rows)
-                    st.write(f"Showing rows {start_idx + 1} to {end_idx} of {total_rows}")
-                    st.write(df.iloc[start_idx:end_idx])
+                # Show only active positions for simplified view
+                if 'position_active' in df.columns:
+                    simplified_df = df[df['position_active'] == True].copy()
+                    if simplified_df.empty:
+                        st.info("No active positions found in the database.")
+                        st.markdown("**Note:** This view shows only active positions. Switch to the 'Raw Database' tab to see all positions including closed ones.")
                 else:
-                    st.write(df)
+                    simplified_df = df.copy()
+                    st.warning("No 'position_active' column found. Showing all positions.")
                 
-                st.warning("💡 The DataFrame display had issues. Consider checking your data types or restarting the dashboard.")
+                if not simplified_df.empty:
+                    # Create simplified DataFrame with calculated columns
+                    simplified_display = pd.DataFrame({
+                        'Symbol': simplified_df['symbol'],
+                        'Quantity': simplified_df['position_shares'],
+                        'Entry Price': simplified_df['entry_price'],
+                        'Current Price': simplified_df['current_price'],
+                        'Unrealized PnL': simplified_df['unrealized_pnl'],
+                        'Realized PnL': simplified_df['realized_pnl']
+                    })
+                    
+                    # Ensure numeric types for calculations
+                    simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce')
+                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
+                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
+                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
+                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
+                    
+                    # Calculate additional columns
+                    simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
+                    simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
+                    simplified_display['Avg Price'] = simplified_display['Entry Price']  # Same as entry price for simplicity
+                    simplified_display['Last Price'] = simplified_display['Current Price']
+                    
+                    # Calculate total PnL (unrealized + realized)
+                    total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
+                    simplified_display['Open Gain/Loss ($)'] = total_pnl
+                    
+                    # Calculate percentage based on total PnL relative to cost basis
+                    simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                    
+                    # Select and reorder columns for display
+                    display_columns = [
+                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
+                    ]
+                    simplified_display = simplified_display[display_columns]
+                    
+                    # Format the data with commas and dollar signs
+                    def format_currency(value):
+                        if pd.isna(value):
+                            return "$0.00"
+                        return f"${value:,.2f}"
+                    
+                    def format_percentage(value):
+                        if pd.isna(value):
+                            return "0.00%"
+                        return f"{value:.2f}%"
+                    
+                    # Apply formatting to the display dataframe
+                    formatted_display = simplified_display.copy()
+                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                    formatted_display['Avg Price'] = formatted_display['Avg Price'].apply(format_currency)
+                    formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
+                    formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
+                    formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
+                    
+                    # Display the formatted table
+                    st.dataframe(formatted_display, use_container_width=True)
+                else:
+                    st.info("No trades found in the database.")
+                
+                # Download button for simplified data
+                csv = simplified_df.to_csv(index=False)
+                st.download_button(
+                    label="Download Simplified Data as CSV",
+                    data=csv,
+                    file_name=f"simplified_trades_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+                
+                if df.empty:
+                    st.info("No data found in trades.db")
             
-            # Download button
-            csv = df.to_csv(index=False)
-            st.download_button(
-                label="Download data as CSV",
-                data=csv,
-                file_name=f"trades_db_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.info("No data found in trades.db")
+            conn.close()
+            
+            # Auto-refresh every 7 seconds
+            st_autorefresh(interval=7000, key="simplified_database_refresh")
         
-        conn.close()
+        with tab2:
+            st.subheader("Raw Database View")
+            
+            # Database management buttons
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                if st.button("Refresh Data", type="primary", key="refresh_raw"):
+                    st.rerun()
+            
+            with col2:
+                if st.button("Start", type="primary", help="Run main.py to start the trading system", key="start_raw"):
+                    try:
+                        
+                        # Get the current directory
+                        current_dir = os.getcwd()
+                        main_py_path = os.path.join(current_dir, "main.py")
+                        
+                        if os.path.exists(main_py_path):
+                            # Open main.py in a new terminal window/process
+                            if os.name == 'nt':  # Windows
+                                # Use a simpler approach for Windows to avoid path issues
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
+                                            shell=True, cwd=current_dir)
+                            else:  # Linux/Mac
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
+                                            cwd=current_dir)
+                            
+                        else:
+                            st.error("main.py not found!")
+                            
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            with col3:
+                if st.button("Save DB", type="secondary", help="Backup the current database", key="save_db_simplified"):
+                    try:
+                        result = trades_db.backup_database()
+                        if result:
+                            st.success("Database backed up successfully!")
+                        else:
+                            st.error("Failed to backup database")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            with col4:
+                if st.button("Clear Database", type="secondary", help="Delete the database file", key="clear_db_simplified"):
+                    try:
+                        if os.path.exists('trades.db'):
+                            # Close any existing connections first
+                            try:
+                                conn = get_db_connection()
+                                if conn:
+                                    conn.close()
+                            except:
+                                pass
+                            
+                            # Wait a moment for connections to close
+                            import time
+                            time.sleep(0.1)
+                            
+                            # Try to delete the file
+                            os.remove('trades.db')
+                            
+                            # Verify deletion
+                            if not os.path.exists('trades.db'):
+                                st.success("Database deleted successfully!")
+                            else:
+                                st.warning("Database file still exists - may be locked by another process")
+                            st.rerun()
+                        else:
+                            st.warning("Database file does not exist")
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            with col5:
+                if st.button("Initialize Bot", type="secondary", help="Initialize database with market cap data", key="init_db_simplified"):
+                    try:
+                        
+                        # Get the current directory
+                        current_dir = os.getcwd()
+                        stock_selector_path = os.path.join(current_dir, "stock_selector.py")
+                        
+                        if os.path.exists(stock_selector_path):
+                            # Run stock_selector.py in a new terminal window/process
+                            if os.name == 'nt':  # Windows
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', stock_selector_path], 
+                                            shell=True, cwd=current_dir)
+                            else:  # Linux/Mac
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', stock_selector_path], 
+                                            cwd=current_dir)
+                            
+                            st.success("Database initialization started in new terminal!")
+                        else:
+                            st.error("stock_selector.py not found!")
+                            
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+            
+            # Connect to database for raw view
+            conn = get_db_connection()
+            if not conn:
+                st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
+                return
+            
+            # Check if stock_strategies table exists
+            table_info = get_table_info(conn)
+            if 'stock_strategies' not in table_info:
+                st.error("The 'stock_strategies' table does not exist in the database.")
+                st.info("This usually means the database hasn't been properly initialized. Try running the main trading application first.")
+                conn.close()
+                return
+            
+            # Get data from stock_strategies table (raw database view)
+            data, column_names = get_all_data(conn, 'stock_strategies')
+            
+            if data:
+                # Convert to DataFrame and display
+                df = pd.DataFrame(data, columns=column_names)
+                
+                # Fix data type issues for Streamlit compatibility
+                # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
+                datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
+                for col in datetime_columns:
+                    if col in df.columns:
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                        except Exception:
+                            # If conversion fails, keep as string but clean it
+                            df[col] = df[col].astype(str)
+                
+                # Convert boolean columns from bytes/ints to proper booleans
+                boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+                for col in boolean_columns:
+                    if col in df.columns:
+                        # Convert bytes/ints to boolean
+                        df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
+                
+                # Convert numeric columns to proper types
+                numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
+                                'take_profit_price', 'used_capital', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
+                                'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
+                for col in numeric_columns:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                
+                # Calculate PnL metrics (raw database view)
+                if 'unrealized_pnl' in df.columns:
+                    total_unrealized_pnl = df['unrealized_pnl'].sum()
+                    total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
+                    total_combined_pnl = total_unrealized_pnl + total_realized_pnl
+                    active_positions = len(df[df['position_active'] == True]) if 'position_active' in df.columns else 0
+                    
+                    # Display PnL metrics in a single row with 4 columns
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                    
+                    with col2:
+                        st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                    
+                    with col3:
+                        st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                    
+                    with col4:
+                        st.metric("Active Positions", active_positions)
+                    
+                    st.markdown("---")
+                
+                # Display the main data table with error handling for PyArrow serialization
+                try:
+                    st.dataframe(df, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error displaying DataFrame: {str(e)}")
+                    st.info("Trying alternative display method...")
+                    
+                    # Fallback: display as text with pagination
+                    st.subheader("Data Table (Alternative View)")
+                    
+                    # Show data in chunks to avoid overwhelming the display
+                    chunk_size = 20
+                    total_rows = len(df)
+                    
+                    if total_rows > chunk_size:
+                        page = st.selectbox(f"Select page (showing {chunk_size} rows per page):", 
+                                        range(1, (total_rows // chunk_size) + 2))
+                        start_idx = (page - 1) * chunk_size
+                        end_idx = min(start_idx + chunk_size, total_rows)
+                        st.write(f"Showing rows {start_idx + 1} to {end_idx} of {total_rows}")
+                        st.write(df.iloc[start_idx:end_idx])
+                    else:
+                        st.write(df)
+                    
+                    st.warning("💡 The DataFrame display had issues. Consider checking your data types or restarting the dashboard.")
+                
+                # Download button
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    label="Download data as CSV",
+                    data=csv,
+                    file_name=f"trades_db_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+                
+                if df.empty:
+                    st.info("No data found in trades.db")
+            
+            conn.close()
         
         # Auto-refresh every 7 seconds
-        st_autorefresh(interval=7000, key="database_refresh")
+            st_autorefresh(interval=7000, key="raw_database_refresh")
+        
+    
+    elif page == "Historical Data":
+        st.header("Historical Data Analysis")
+        st.markdown("View and analyze historical trading data from previous sessions")
+        
+        # Get available historical databases
+        historical_files = trades_db.get_historical_databases()
+        
+        if not historical_files:
+            st.warning("No historical data found. Run the trading system first to generate historical data.")
+            st.info("Historical data is automatically backed up when you start main.py")
+        else:
+            # Create tabs for different views
+            tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Symbol Performance", "File Explorer", "Database Viewer"])
+            
+            with tab1:
+                st.subheader("Summary Statistics")
+                
+                # Date range selector
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=30), key="summary_start_date")
+                with col2:
+                    end_date = st.date_input("End Date", value=datetime.now(), key="summary_end_date")
+                with col3:
+                    if st.button("Refresh Data", type="primary", key="summary_refresh"):
+                        st.rerun()
+                
+                # Get aggregated data for the full range first
+                # Convert date objects to datetime objects for comparison
+                start_datetime = datetime.combine(start_date, datetime.min.time()) if start_date else None
+                end_datetime = datetime.combine(end_date, datetime.max.time()) if end_date else None
+                
+                data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
+                st.write(f"Found {len(data) if data else 0} records")
+                
+                if data:
+                    df = pd.DataFrame(data)
+                    
+                    # Summary metrics
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Total Records", len(df))
+                    with col2:
+                        st.metric("Unique Symbols", df['symbol'].nunique())
+                    with col3:
+                        active_positions = len(df[df['position_active'] == True])
+                        st.metric("Active Positions", active_positions)
+                    with col4:
+                        total_pnl = df['realized_pnl'].sum()
+                        st.metric("Total P&L", f"${total_pnl:.2f}")
+                    
+                    # Performance chart
+                    st.subheader("Performance Over Time")
+                    
+                    # Group by date and calculate daily metrics
+                    if 'data_date' in df.columns:
+                        daily_metrics = df.groupby('data_date').agg({
+                            'realized_pnl': 'sum',
+                            'symbol': 'nunique',
+                            'position_active': lambda x: (x == True).sum()
+                        }).reset_index()
+                        
+                        daily_metrics['pnl'] = daily_metrics['realized_pnl']
+                        daily_metrics['data_date'] = pd.to_datetime(daily_metrics['data_date'].str.split('_').str[0])
+                        
+                        # Create two columns for charts
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader("PnL Over Time")
+                            st.line_chart(daily_metrics.set_index('data_date')[['pnl']])
+                        
+                        with col2:
+                            st.subheader("Position Size Over Time")
+                            st.line_chart(daily_metrics.set_index('data_date')[['symbol']])
+                    
+                    # Top performing symbols
+                    st.subheader("Top Performing Symbols")
+                    symbol_performance = df.groupby('symbol').agg({
+                        'realized_pnl': 'sum',
+                        'shares': 'sum',
+                            'score': 'mean',
+                            'entry_price': 'mean',
+                            'current_price': 'mean',
+                            'unrealized_pnl': 'sum'
+                    }).reset_index()
+                    
+                    # Sort by realized PnL
+                    symbol_performance = symbol_performance.sort_values('realized_pnl', ascending=False)
+                    
+                    # Create simplified display format
+                    top_symbols_display = pd.DataFrame({
+                        'Symbol': symbol_performance['symbol'],
+                        'Quantity': symbol_performance['shares'],
+                        'Entry Price': symbol_performance['entry_price'],
+                        'Current Price': symbol_performance['current_price'],
+                        'Unrealized PnL': symbol_performance['unrealized_pnl'],
+                        'Realized PnL': symbol_performance['realized_pnl']
+                    })
+                    
+                    # Calculate additional columns
+                    top_symbols_display['Cost Basis'] = top_symbols_display['Quantity'] * top_symbols_display['Entry Price']
+                    top_symbols_display['Market Value'] = top_symbols_display['Quantity'] * top_symbols_display['Current Price']
+                    top_symbols_display['Avg Price'] = top_symbols_display['Entry Price']
+                    top_symbols_display['Last Price'] = top_symbols_display['Current Price']
+                    
+                    # Calculate total PnL (unrealized + realized)
+                    total_pnl = top_symbols_display['Unrealized PnL'] + top_symbols_display['Realized PnL']
+                    top_symbols_display['Open Gain/Loss ($)'] = total_pnl
+                    
+                    # Calculate percentage based on total PnL relative to cost basis
+                    top_symbols_display['Open Gain/Loss (%)'] = (total_pnl / top_symbols_display['Cost Basis'] * 100).round(2)
+                    
+                    # Add Avg Score column
+                    top_symbols_display['Avg Score'] = symbol_performance['score']
+                    
+                    # Select and reorder columns for display
+                    display_columns = [
+                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)',
+                        'Avg Score'
+                    ]
+                    top_symbols_display = top_symbols_display[display_columns]
+                    
+                    # Format the data with commas and dollar signs
+                    def format_currency(value):
+                        if pd.isna(value):
+                            return "$0.00"
+                        return f"${value:,.2f}"
+                    
+                    def format_percentage(value):
+                        if pd.isna(value):
+                            return "0.00%"
+                        return f"{value:.2f}%"
+                    
+                    # Apply formatting to the display dataframe
+                    formatted_top_symbols = top_symbols_display.copy()
+                    formatted_top_symbols['Cost Basis'] = formatted_top_symbols['Cost Basis'].apply(format_currency)
+                    formatted_top_symbols['Market Value'] = formatted_top_symbols['Market Value'].apply(format_currency)
+                    formatted_top_symbols['Avg Price'] = formatted_top_symbols['Avg Price'].apply(format_currency)
+                    formatted_top_symbols['Last Price'] = formatted_top_symbols['Last Price'].apply(format_currency)
+                    formatted_top_symbols['Open Gain/Loss ($)'] = formatted_top_symbols['Open Gain/Loss ($)'].apply(format_currency)
+                    formatted_top_symbols['Open Gain/Loss (%)'] = formatted_top_symbols['Open Gain/Loss (%)'].apply(format_percentage)
+                    formatted_top_symbols['Avg Score'] = formatted_top_symbols['Avg Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
+                    
+                    # Display the formatted table
+                    st.dataframe(formatted_top_symbols.head(10), use_container_width=True)
+            
+            with tab2:
+                st.subheader("Symbol Performance Analysis")
+                
+                # Date range selector for Symbol Performance
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    symbol_start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=30), key="symbol_start_date")
+                with col2:
+                    symbol_end_date = st.date_input("End Date", value=datetime.now(), key="symbol_end_date")
+                with col3:
+                    if st.button("Refresh Data", type="primary", key="symbol_refresh"):
+                        st.rerun()
+                
+                # Get all symbols from historical data
+                # Convert date objects to datetime objects for comparison
+                start_datetime = datetime.combine(symbol_start_date, datetime.min.time()) if symbol_start_date else None
+                end_datetime = datetime.combine(symbol_end_date, datetime.max.time()) if symbol_end_date else None
+                all_data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
+                st.write(f"Found {len(all_data) if all_data else 0} records")
+                if all_data:
+                    df = pd.DataFrame(all_data)
+                    symbols = sorted(df['symbol'].unique())
+                    
+                    selected_symbol = st.selectbox("Select Symbol:", symbols)
+                    
+                    if selected_symbol:
+                        symbol_data = df[df['symbol'] == selected_symbol].copy()
+                        
+                        # Symbol metrics
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Total Shares", symbol_data['shares'].sum())
+                        with col2:
+                            st.metric("Total P&L", f"${symbol_data['realized_pnl'].sum():.2f}")
+                        with col3:
+                            st.metric("Avg Score", f"{symbol_data['score'].mean():.2f}")
+                        
+                        # Symbol performance over time
+                        st.subheader(f"{selected_symbol} Performance Over Time")
+                        
+                        symbol_data.loc[:, 'data_date_clean'] = pd.to_datetime(symbol_data['data_date'].str.split('_').str[0])
+                        symbol_data_sorted = symbol_data.sort_values('data_date_clean')
+                        
+                        # Create two columns for charts
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.subheader(f"{selected_symbol} PnL Over Time")
+                            st.line_chart(
+                                symbol_data_sorted.set_index('data_date_clean')[['realized_pnl']]
+                            )
+                        
+                        with col2:
+                            st.subheader(f"{selected_symbol} Position Size Over Time")
+                            st.line_chart(
+                                symbol_data_sorted.set_index('data_date_clean')[['shares']]
+                            )
+                        
+                        # Detailed symbol data - exclude datetime columns that cause Arrow issues
+                        st.subheader(f"{selected_symbol} Detailed Data")
+                        
+                        # Add view toggle
+                        view_mode = st.radio(
+                            "Select View Mode:",
+                            ["Simplified View", "Raw Data"],
+                            key=f"symbol_view_{selected_symbol}"
+                        )
+                        
+                        if view_mode == "Simplified View":
+                            # Create simplified display format
+                            simplified_display = pd.DataFrame({
+                                'Date': symbol_data['data_date'],
+                                'Symbol': symbol_data['symbol'],
+                                'Quantity': symbol_data['position_shares'],
+                                'Entry Price': symbol_data['entry_price'],
+                                'Current Price': symbol_data['current_price'],
+                                'Unrealized PnL': symbol_data['unrealized_pnl'],
+                                'Realized PnL': symbol_data['realized_pnl']
+                            })
+                            
+                            # Calculate additional columns
+                            simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
+                            simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
+                            simplified_display['Avg Price'] = simplified_display['Entry Price']
+                            simplified_display['Last Price'] = simplified_display['Current Price']
+                            
+                            # Calculate total PnL (unrealized + realized)
+                            total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
+                            simplified_display['Open Gain/Loss ($)'] = total_pnl
+                            
+                            # Calculate percentage based on total PnL relative to cost basis
+                            simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                            
+                            # Add Score column
+                            simplified_display['Score'] = symbol_data['score']
+                            
+                            # Select and reorder columns for display
+                            display_columns = [
+                                'Date', 'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                                'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)', 'Score'
+                            ]
+                            simplified_display = simplified_display[display_columns]
+                            
+                            # Format the data with commas and dollar signs
+                            def format_currency(value):
+                                if pd.isna(value):
+                                    return "$0.00"
+                                return f"${value:,.2f}"
+                            
+                            def format_percentage(value):
+                                if pd.isna(value):
+                                    return "0.00%"
+                                return f"{value:.2f}%"
+                            
+                            # Apply formatting to the display dataframe
+                            formatted_display = simplified_display.copy()
+                            formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                            formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                            formatted_display['Avg Price'] = formatted_display['Avg Price'].apply(format_currency)
+                            formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
+                            formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
+                            formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
+                            formatted_display['Score'] = formatted_display['Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
+                            
+                            # Display the formatted table
+                            st.dataframe(formatted_display, use_container_width=True)
+                        else:
+                            # Raw data view
+                            display_data = symbol_data[['data_date', 'position_active', 'position_shares', 'shares',
+                                                    'entry_price', 'current_price', 'realized_pnl',
+                                                    'score']].copy()
+                            
+                            # Convert datetime columns to strings to avoid Arrow conversion issues
+                            if 'entry_time' in symbol_data.columns:
+                                display_data['entry_time'] = symbol_data['entry_time'].astype(str)
+                            if 'close_time' in symbol_data.columns:
+                                display_data['close_time'] = symbol_data['close_time'].astype(str)
+                            
+                            st.dataframe(display_data, use_container_width=True)
+                else:
+                    st.warning("No historical data available for symbol analysis")
+            
+            with tab3:
+                st.subheader("Historical File Explorer")
+                
+                # Display all historical files
+                st.write("Available historical database files:")
+                
+                if historical_files:
+                    # Create a file selector for deletion
+                    file_options = [f"{f['filename']} ({f['date']})" for f in historical_files]
+                    selected_file_idx = st.selectbox(
+                        "Select Database File to Delete:",
+                        range(len(file_options)),
+                        format_func=lambda x: file_options[x],
+                        key="delete_file_selector"
+                    )
+                    
+                    if selected_file_idx is not None:
+                        selected_file = historical_files[selected_file_idx]
+                        
+                        # Show file details
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Selected File", selected_file['filename'])
+                        with col2:
+                            st.metric("Size", f"{round(selected_file['size'] / 1024, 2)} KB")
+                        with col3:
+                            st.metric("Modified", selected_file['modified'].strftime('%Y-%m-%d'))
+                        
+                        # Delete button
+                        if st.button("Delete Selected Database", type="secondary", help=f"Delete {selected_file['filename']}"):
+                            try:
+                                if os.path.exists(selected_file['path']):
+                                    os.remove(selected_file['path'])
+                                    
+                                    # Verify deletion
+                                    if not os.path.exists(selected_file['path']):
+                                        st.success(f"Successfully deleted {selected_file['filename']}")
+                                        st.rerun()
+                                    else:
+                                        st.warning("File still exists - may be locked by another process")
+                                else:
+                                    st.warning("File does not exist")
+                            except Exception as e:
+                                st.error(f"Error deleting file: {str(e)}")
+                    
+                    # Display table of all files
+                file_data = []
+                for file_info in historical_files:
+                    file_data.append({
+                        'Filename': file_info['filename'],
+                        'Date': file_info['date'],
+                        'Size (KB)': round(file_info['size'] / 1024, 2),
+                        'Modified': file_info['modified'].strftime('%Y-%m-%d %H:%M:%S')
+                    })
+                
+                df_files = pd.DataFrame(file_data)
+                st.dataframe(df_files, use_container_width=True)
+                
+                # File actions
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("Refresh File List", type="primary"):
+                        st.rerun()
+                
+                with col2:
+                    if st.button("Load All Data"):
+                        # Use default date range for file explorer (last 30 days)
+                        file_start_date = datetime.now() - timedelta(days=30)
+                        file_end_date = datetime.now()
+                        start_datetime = datetime.combine(file_start_date, datetime.min.time())
+                        end_datetime = datetime.combine(file_end_date, datetime.max.time())
+                        all_data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
+                        if all_data:
+                            st.success(f"Loaded {len(all_data)} records from all historical files")
+                            
+                            # Export option
+                            csv_data = pd.DataFrame(all_data).to_csv(index=False)
+                            st.download_button(
+                                label="Download CSV",
+                                data=csv_data,
+                                file_name=f"historical_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv"
+                            )
+                        else:
+                            st.warning("No data found in historical files")
+            
+            with tab4:
+                st.subheader("Database Viewer")
+                st.markdown("View raw and simplified data from any historical database file")
+                
+                # Database file selector
+                if historical_files:
+                    file_options = [f"{f['filename']} ({f['date']})" for f in historical_files]
+                    selected_file_idx = st.selectbox(
+                        "Select Database File:",
+                        range(len(file_options)),
+                        format_func=lambda x: file_options[x]
+                    )
+                    
+                    if selected_file_idx is not None:
+                        selected_file = historical_files[selected_file_idx]
+                        
+                        # Load data from selected file
+                        data = trades_db.load_historical_data(selected_file['path'])
+                        
+                        if data:
+                            df = pd.DataFrame(data)
+                            
+                            # File info
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("File", selected_file['filename'])
+                            with col2:
+                                st.metric("Records", len(df))
+                            with col3:
+                                st.metric("Symbols", df['symbol'].nunique())
+                            
+                            # View type selector
+                            view_type = st.radio(
+                                "Select View Type:",
+                                ["Simplified View", "Raw Database"],
+                                horizontal=True
+                            )
+                            
+                            if view_type == "Simplified View":
+                                st.subheader("Simplified View")
+                                st.markdown("Key metrics and simplified data presentation")
+                                
+                                # Summary metrics
+                                col1, col2, col3, col4 = st.columns(4)
+                                
+                                with col1:
+                                    st.metric("Total Records", len(df))
+                                with col2:
+                                    active_positions = len(df[df['position_active'] == True])
+                                    st.metric("Active Positions", active_positions)
+                                with col3:
+                                    total_pnl = df['realized_pnl'].sum() + df['unrealized_pnl'].sum()
+                                    st.metric("Total P&L", f"${total_pnl:.2f}")
+                                with col4:
+                                    avg_score = df['score'].mean()
+                                    st.metric("Avg Score", f"{avg_score:.2f}")
+                                
+                                # Filter to show only active positions for simplified view
+                                if 'position_active' in df.columns:
+                                    simplified_df = df[df['position_active'] == True].copy()
+                                else:
+                                    simplified_df = df.copy()
+                                
+                                if not simplified_df.empty:
+                                    # Create simplified DataFrame with calculated columns
+                                    simplified_display = pd.DataFrame({
+                                        'Symbol': simplified_df['symbol'],
+                                        'Quantity': simplified_df['position_shares'],
+                                        'Entry Price': simplified_df['entry_price'],
+                                        'Current Price': simplified_df['current_price'],
+                                        'Unrealized PnL': simplified_df['unrealized_pnl'],
+                                        'Realized PnL': simplified_df['realized_pnl']
+                                    })
+                                    
+                                    # Ensure numeric types for calculations
+                                    simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce')
+                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
+                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
+                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
+                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
+                                    
+                                    # Calculate additional columns
+                                    simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
+                                    simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
+                                    simplified_display['Avg Price'] = simplified_display['Entry Price']  # Same as entry price for simplicity
+                                    simplified_display['Last Price'] = simplified_display['Current Price']
+                                    
+                                    # Calculate total PnL (unrealized + realized)
+                                    total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
+                                    simplified_display['Open Gain/Loss ($)'] = total_pnl
+                                    
+                                    # Calculate percentage based on total PnL relative to cost basis
+                                    simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                                    
+                                    # Select and reorder columns for display
+                                    display_columns = [
+                                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
+                                    ]
+                                    simplified_display = simplified_display[display_columns]
+                                    
+                                    # Format the data with commas and dollar signs
+                                    def format_currency(value):
+                                        if pd.isna(value):
+                                            return "$0.00"
+                                        return f"${value:,.2f}"
+                                    
+                                    def format_percentage(value):
+                                        if pd.isna(value):
+                                            return "0.00%"
+                                        return f"{value:.2f}%"
+                                    
+                                    # Apply formatting to the display dataframe
+                                    formatted_display = simplified_display.copy()
+                                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                                    formatted_display['Avg Price'] = formatted_display['Avg Price'].apply(format_currency)
+                                    formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
+                                    formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
+                                    formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
+                                    
+                                    # Display the formatted table
+                                    st.dataframe(formatted_display, use_container_width=True)
+                                else:
+                                    st.info("No active positions found in the database.")
+                                
+                                # Download simplified data
+                                csv_data = simplified_df.to_csv(index=False)
+                                st.download_button(
+                                    label="Download Simplified Data",
+                                    data=csv_data,
+                                    file_name=f"simplified_{selected_file['filename'].replace('.db', '.csv')}",
+                                    mime="text/csv"
+                                )
+                                
+                            
+                            else:  # Raw Database
+                                st.subheader("Raw Database View")
+                                st.markdown("Complete data from the selected database file")
+                                
+                                # Convert datetime columns to strings to avoid Arrow conversion issues
+                                df_display = df.copy()
+                                datetime_columns = ['entry_time', 'close_time', 'trailing_exit_start_time', 'hedge_entry_time']
+                                for col in datetime_columns:
+                                    if col in df_display.columns:
+                                        df_display[col] = df_display[col].astype(str)
+                                
+                                # Show all columns
+                                st.dataframe(df_display, use_container_width=True)
+                                
+                                # Download raw data
+                                csv_data = df.to_csv(index=False)
+                                st.download_button(
+                                    label="Download Raw Data",
+                                    data=csv_data,
+                                    file_name=f"raw_{selected_file['filename'].replace('.db', '.csv')}",
+                                    mime="text/csv"
+                                )
+                        else:
+                            st.error("Failed to load data from selected file")
+                else:
+                    st.warning("No historical database files found")
         
     elif page == "Configuration Editor":        
         # Create tabs for different config sections
@@ -1167,11 +2001,71 @@ def main():
                     format="%.3f"
                 )
             
+            # Hedge Exit Conditions
+            st.markdown("---")
+            st.write("**Hedge Exit Conditions**")
+            col1, col2 = st.columns(2)
+            with col1:
+                vix_exit_threshold = st.number_input(
+                    "VIX Exit Threshold:", 
+                    min_value=10, 
+                    max_value=30, 
+                    value=hedge_config.get('exit_conditions', {}).get('vix_exit_threshold', 20), 
+                    step=1, 
+                    key="vix_exit_threshold",
+                    help="VIX level below which hedge can be scaled down"
+                )
+                vix_slope_period = st.number_input(
+                    "VIX Slope Period (min):", 
+                    min_value=5, 
+                    max_value=30, 
+                    value=hedge_config.get('exit_conditions', {}).get('vix_slope_period', 10), 
+                    step=1, 
+                    key="vix_slope_period",
+                    help="Time period to check VIX falling trend"
+                )
+            with col2:
+                sp500_recovery_threshold = st.number_input(
+                    "S&P 500 Recovery Threshold (%):", 
+                    min_value=0.001, 
+                    max_value=0.02, 
+                    value=hedge_config.get('exit_conditions', {}).get('sp500_recovery_threshold', 0.006), 
+                    step=0.001, 
+                    key="sp500_recovery_threshold",
+                    format="%.3f",
+                    help="S&P 500 gain threshold to trigger hedge reduction"
+                )
+                qqq_vwap_consecutive_bars = st.number_input(
+                    "QQQ VWAP Consecutive Bars:", 
+                    min_value=1, 
+                    max_value=5, 
+                    value=hedge_config.get('exit_conditions', {}).get('qqq_vwap_consecutive_bars', 2), 
+                    step=1, 
+                    key="qqq_vwap_consecutive_bars",
+                    help="Number of consecutive bars QQQ must trade above VWAP"
+                )
+            
             # Hedge Levels
             st.markdown("---")
             st.write("**Hedge Levels**")
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
+                st.write("**Early Hedge**")
+                early_beta = st.number_input(
+                    "Early Hedge Beta:", 
+                    min_value=0.01, 
+                    max_value=1.0, 
+                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('beta', 0.1), 
+                    step=0.01, 
+                    key="early_beta",
+                    format="%.2f"
+                )
+                early_description = st.text_input(
+                    "Early Description:", 
+                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('description', 'Early hedge: Single risk indicator triggered'), 
+                    key="early_description"
+                )
+            with col2:
                 st.write("**Mild Hedge**")
                 mild_beta = st.number_input(
                     "Mild Hedge Beta:", 
@@ -1187,7 +2081,7 @@ def main():
                     value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('description', 'Mild hedge: VIX elevated but market stable'), 
                     key="mild_description"
                 )
-            with col2:
+            with col3:
                 st.write("**Severe Hedge**")
                 severe_beta = st.number_input(
                     "Severe Hedge Beta:", 
@@ -1304,7 +2198,6 @@ def main():
 
         with tab7:
             st.subheader("Trading Hours Configuration")
-            st.info("**Note:** All times are displayed in Central Standard Time (CST)")
             
             trading_hours_config = config.get('TRADING_HOURS', {})
             
@@ -1320,12 +2213,26 @@ def main():
                     "Market Close:", 
                     value=datetime.strptime(trading_hours_config.get('market_close', '16:00'), "%H:%M").time()
                 )
+                # Timezone options with US/Eastern as primary option
+                timezone_options = ["US/Eastern", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"]
+                timezone_mapping = {
+                    'US/Eastern': 'US/Eastern',
+                    'US/Central': 'America/Chicago',
+                    'US/Mountain': 'America/Denver',
+                    'US/Pacific': 'America/Los_Angeles',
+                    'America/New_York': 'America/New_York',
+                    'America/Chicago': 'America/Chicago',
+                    'America/Denver': 'America/Denver',
+                    'America/Los_Angeles': 'America/Los_Angeles'
+                }
+                
+                current_timezone = trading_hours_config.get('timezone', 'US/Eastern')
+                mapped_timezone = timezone_mapping.get(current_timezone, 'US/Eastern')
+                
                 timezone = st.selectbox(
                     "Timezone:", 
-                    ["America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles"],
-                    index=["America/Chicago", "America/New_York", "America/Denver", "America/Los_Angeles"].index(
-                        trading_hours_config.get('timezone', 'America/Chicago')
-                    )
+                    timezone_options,
+                    index=timezone_options.index(mapped_timezone)
                 )
             
             with col2:
@@ -1345,6 +2252,32 @@ def main():
                 afternoon_end = st.time_input(
                     "Afternoon Entry End:", 
                     value=datetime.strptime(trading_hours_config.get('afternoon_entry_end', '14:30'), "%H:%M").time()
+                )
+            
+            # Exit Times Configuration
+            st.markdown("---")
+            st.write("**Exit Times**")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                weak_exit_time = st.time_input(
+                    "Weak Exit Time:", 
+                    value=datetime.strptime(trading_hours_config.get('weak_exit_time', '15:30'), "%H:%M").time(),
+                    help="Time to exit weak positions (-0.3% to +1.2%)"
+                )
+            
+            with col2:
+                hedge_force_exit_time = st.time_input(
+                    "Hedge Force Exit Time:", 
+                    value=datetime.strptime(trading_hours_config.get('hedge_force_exit_time', '15:55'), "%H:%M").time(),
+                    help="Time to force close all hedge positions"
+                )
+            
+            with col3:
+                safety_exit_time = st.time_input(
+                    "Safety Exit Time:", 
+                    value=datetime.strptime(trading_hours_config.get('safety_exit_time', '15:55'), "%H:%M").time(),
+                    help="Time to force close all positions"
                 )
         
         # Global Save Configuration Button
@@ -1453,7 +2386,14 @@ def main():
                     "enabled": hedge_enabled,
                     "hedge_symbol": hedge_symbol,
                     "triggers": {"vix_threshold": vix_threshold, "sp500_drop_threshold": sp500_drop_threshold},
+                    "exit_conditions": {
+                        "vix_exit_threshold": vix_exit_threshold,
+                        "vix_slope_period": vix_slope_period,
+                        "sp500_recovery_threshold": sp500_recovery_threshold,
+                        "qqq_vwap_consecutive_bars": qqq_vwap_consecutive_bars
+                    },
                     "hedge_levels": {
+                        "early": {"beta": early_beta, "description": early_description},
                         "mild": {"beta": mild_beta, "description": mild_description},
                         "severe": {"beta": severe_beta, "description": severe_description}
                     }
@@ -1477,7 +2417,10 @@ def main():
                     "morning_entry_start": morning_start.strftime("%H:%M"),
                     "morning_entry_end": morning_end.strftime("%H:%M"),
                     "afternoon_entry_start": afternoon_start.strftime("%H:%M"),
-                    "afternoon_entry_end": afternoon_end.strftime("%H:%M")
+                    "afternoon_entry_end": afternoon_end.strftime("%H:%M"),
+                    "weak_exit_time": weak_exit_time.strftime("%H:%M"),
+                    "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
+                    "safety_exit_time": safety_exit_time.strftime("%H:%M")
                 }
             }
             
@@ -1522,7 +2465,7 @@ def main():
                             st.error(f"Error saving configuration: {str(e)}")
                 
                 with col2:
-                    if st.button("🔄 Reload from File", key="reload_raw_config"):
+                    if st.button("Reload from File", key="reload_raw_config"):
                         st.rerun()
                         
             else:

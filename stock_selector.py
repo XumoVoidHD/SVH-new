@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from helpers.adv import calc_adv
 from helpers.rvol import calc_rvol
+from helpers.fetch_marketcap_csv import fetch_marketcap_csv
 
 def load_config(json_file='creds.json'):
     """Load configuration from JSON file and make it accessible like a module"""
@@ -61,6 +62,9 @@ class StockSelector:
         self.adv_data_cache = {}
 
     def load_and_filter_market_cap(self):
+        # Delete existing cache files if they exist
+
+        
         df = pd.read_csv(self.csv_path)
         df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
         df = df[df["marketcap"] > self.market_cap_filter]
@@ -538,6 +542,15 @@ class StockSelector:
 
 
 if __name__ == "__main__":
+    fetch_marketcap_csv()
+    cache_files = ['adv_cache.pkl', 'rvol_cache.pkl']
+    for cache_file in cache_files:
+        if os.path.exists(cache_file):
+            try:
+                os.remove(cache_file)
+                print(f"Deleted existing cache file: {cache_file}")
+            except Exception as e:
+                print(f"Warning: Could not delete cache file {cache_file}: {e}")
     selector = StockSelector()
     start_time = time.time()
     top_sector_stocks = selector.load_and_filter_market_cap()

@@ -13,6 +13,7 @@ from db.trades_db import trades_db
 import json
 from types import SimpleNamespace
 from simulation.ib_broker import IBBroker
+import traceback
 setup_logger()
 
 def load_config(json_file='creds.json'):
@@ -59,13 +60,13 @@ class Strategy:
         
         self.data = {}
         self.indicators = {}
-        self.position_active = True 
-        self.position_shares = 5
+        self.position_active = False 
+        self.position_shares = 0
         self.current_price = 0
         self.entry_price = 0
         self.stop_loss_price = 0
         self.take_profit_price = 0
-        self.used_margin = 0
+        self.used_capital = 0
         self.unrealized_pnl = 0
         self.realized_pnl = 0
         self.entry_time = None
@@ -84,7 +85,6 @@ class Strategy:
         
         # Capital tracking
         self.used_capital = 0
-        self.used_margin = 0
     
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
@@ -114,6 +114,10 @@ class Strategy:
         in_afternoon_window = afternoon_start_obj <= current_time_obj <= afternoon_end_obj
         
         return in_morning_window or in_afternoon_window
+    
+    def time_str_to_datetime(self, time_str):
+        """Convert time string to datetime object for comparison"""
+        return datetime.strptime(time_str, "%H:%M").time()
     
     def get_next_entry_window(self):
         """Get information about the next entry window"""
@@ -175,7 +179,6 @@ class Strategy:
             
         except Exception as e:
             print(f"Error checking hedge triggers: {e}")
-            import traceback
             traceback.print_exc()
             return None, 0
         
@@ -183,6 +186,9 @@ class Strategy:
         if triggers_met == 0:
             return None, 0
         elif triggers_met == 1:
+            hedge_level = 'early'
+            beta = self.hedge_config.hedge_levels.early.beta
+        elif triggers_met == 2:
             hedge_level = 'mild'
             beta = self.hedge_config.hedge_levels.mild.beta
         else:
@@ -227,7 +233,6 @@ class Strategy:
              
         except Exception as e:
             print(f"Error checking leverage conditions: {e}")
-            import traceback
             traceback.print_exc()
             return 1.0
         
@@ -268,7 +273,7 @@ class Strategy:
             # Calculate shares to short
             hedge_shares = int(hedge_amount / xlf_price)
 
-            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=xlf_price, side="SELL")
+            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=xlf_price, side="BUY")
             if trade is None:
                 print(f"Unable to place hedge order for {self.hedge_symbol}")
                 return
@@ -281,6 +286,7 @@ class Strategy:
             # Update hedge status and track hedge position
             self.hedge_active = True
             self.hedge_shares = hedge_shares
+            self.hedge_level = hedge_level
             
             # Update database with hedge information
             trades_db.update_strategy_data(self.stock,
@@ -298,6 +304,141 @@ class Strategy:
                 
         except Exception as e:
             print(f"Error executing hedge: {e}")
+            traceback.print_exc()
+    
+    def check_hedge_exit_conditions(self):
+        """Check if hedge exit conditions are met for scaling down"""
+        if not self.hedge_active:
+            return None
+        
+        recovery_signals = 0
+        signal_details = []
+        
+        try:
+            # Check VIX < 20 and falling (10-min slope negative)
+            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size=3)
+            if not vix_data.empty and len(vix_data) >= 4 and 'close' in vix_data.columns:
+                current_vix = vix_data['close'].iloc[-1]
+                vix_slope_period = self.hedge_config.exit_conditions.vix_slope_period
+                vix_exit_threshold = self.hedge_config.exit_conditions.vix_exit_threshold
+                vix_10min_ago = vix_data['close'].iloc[-4]  # ~10 minutes ago (3min bars)
+                
+                if current_vix < vix_exit_threshold and current_vix < vix_10min_ago:
+                    recovery_signals += 1
+                    signal_details.append(f"VIX {current_vix:.1f} < {vix_exit_threshold} and falling")
+            
+            # Check S&P 500 up > +0.6% in 15 min after hedge added
+            spy_data = self.broker.get_historical_data(stock="SPY", bar_size=15)
+            if not spy_data.empty and len(spy_data) >= 2 and 'close' in spy_data.columns:
+                current_price = spy_data['close'].iloc[-1]
+                price_15min_ago = spy_data['close'].iloc[-2]
+                gain_pct = (current_price - price_15min_ago) / price_15min_ago
+                sp500_recovery_threshold = self.hedge_config.exit_conditions.sp500_recovery_threshold
+                
+                if gain_pct > sp500_recovery_threshold:
+                    recovery_signals += 1
+                    signal_details.append(f"S&P up {gain_pct*100:.1f}% > {sp500_recovery_threshold*100:.1f}%")
+            
+            # Check Nasdaq (QQQ) trades above 5-min VWAP for 2+ consecutive bars
+            qqq_data = self.broker.get_historical_data(stock="QQQ", bar_size=5)
+            if not qqq_data.empty and len(qqq_data) >= 2 and 'close' in qqq_data.columns:
+                # Calculate 5-min VWAP
+                qqq_vwap = vwap.calc_vwap(qqq_data)
+                qqq_consecutive_bars = self.hedge_config.exit_conditions.qqq_vwap_consecutive_bars
+                if len(qqq_vwap) >= qqq_consecutive_bars:
+                    current_qqq = qqq_data['close'].iloc[-1]
+                    qqq_vwap_current = qqq_vwap.iloc[-1]
+                    qqq_vwap_prev = qqq_vwap.iloc[-2]
+                    
+                    # Check if QQQ is above VWAP for 2+ consecutive bars
+                    if current_qqq > qqq_vwap_current and qqq_data['close'].iloc[-2] > qqq_vwap_prev:
+                        recovery_signals += 1
+                        signal_details.append(f"QQQ above 5-min VWAP for {qqq_consecutive_bars}+ bars")
+            
+        except Exception as e:
+            print(f"Error checking hedge exit conditions: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        
+        print(f"Hedge exit signals: {recovery_signals} met - {', '.join(signal_details)}")
+        return recovery_signals
+    
+    def scale_down_hedge(self):
+        """Scale down hedge based on current level and recovery signals"""
+        if not self.hedge_active:
+            return
+        
+        recovery_signals = self.check_hedge_exit_conditions()
+        if recovery_signals is None or recovery_signals == 0:
+            return 
+        
+        try:
+            # Determine current hedge level from database or config
+            current_hedge_level = getattr(self, 'hedge_level', 'severe')
+            
+            # Scale down logic
+            if current_hedge_level == 'severe':
+                # Severe (-0.3β) → cut to Mild (-0.15β)
+                new_level = 'mild'
+                new_beta = self.hedge_config.hedge_levels.mild.beta
+                print(f"Scaling hedge: Severe → Mild ({new_beta*100:.1f}% of equity)")
+                
+            elif current_hedge_level == 'mild':
+                # Mild (-0.15β) → cut to Early (-0.1β)
+                new_level = 'early'
+                new_beta = self.hedge_config.hedge_levels.early.beta
+                print(f"Scaling hedge: Mild → Early ({new_beta*100:.1f}% of equity)")
+                
+            elif current_hedge_level == 'early':
+                # Early (-0.1β) → exit fully
+                print(f"Scaling hedge: Early → Exit fully")
+                self.close_hedge()
+                return
+            
+            else:
+                print(f"Unknown hedge level: {current_hedge_level}")
+                return
+            
+            # Calculate new hedge size
+            account_equity = creds.EQUITY
+            new_hedge_amount = account_equity * new_beta
+            
+            # Get current hedge price
+            hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            if hedge_price is None:
+                print(f"Unable to get {self.hedge_symbol} price for hedge scaling")
+                return
+            
+            # Calculate shares to adjust
+            new_hedge_shares = int(new_hedge_amount / hedge_price)
+            shares_to_close = self.hedge_shares - new_hedge_shares
+            
+            if shares_to_close > 0:
+                print(f"Closing {shares_to_close} shares of hedge (reducing from {self.hedge_shares} to {new_hedge_shares})")
+                
+                # Close partial hedge position
+                trade = self.broker.place_order(symbol=self.hedge_symbol, qty=shares_to_close, order_type="MARKET", price=hedge_price, side="SELL")
+                if trade is None:
+                    print(f"Unable to place hedge scaling order for {self.hedge_symbol}")
+                    return
+                
+                # Update hedge status
+                self.hedge_shares = new_hedge_shares
+                self.hedge_level = new_level
+                
+                # Update database with hedge scaling
+                trades_db.update_strategy_data(self.stock,
+                    hedge_shares=self.hedge_shares,
+                    hedge_level=new_level,
+                    hedge_beta=new_beta
+                )
+                
+                print(f"Hedge scaled down successfully: {current_hedge_level} → {new_level}")
+                print(f"Remaining hedge: {self.hedge_shares} shares ({new_beta*100:.1f}% of equity)")
+            
+        except Exception as e:
+            print(f"Error scaling down hedge: {e}")
             import traceback
             traceback.print_exc()
     
@@ -344,11 +485,10 @@ class Strategy:
                 
         except Exception as e:
             print(f"Error closing hedge: {e}")
-            import traceback
             traceback.print_exc()
     
     def end_of_day_weak_exit(self):
-        """Exit weak positions at 3:30 PM (-0.3% to +1.2%)"""
+        """Exit weak positions at configured weak exit time (-0.3% to +1.2%)"""
         if not self.position_active:
             return
         
@@ -356,21 +496,25 @@ class Strategy:
         
         # Exit if position is weak (-0.3% to +1.2%)
         if -0.003 <= current_gain_pct <= 0.012:
-            print(f"3:30 PM Weak Exit: {current_gain_pct*100:.1f}% gain in weak range")
+            weak_exit_time = self.trading_hours.weak_exit_time
+            print(f"{weak_exit_time} Weak Exit: {current_gain_pct*100:.1f}% gain in weak range")
             self.close_position('end_of_day_weak', self.position_shares)
         else:
-            print(f"3:30 PM: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
+            weak_exit_time = self.trading_hours.weak_exit_time
+            print(f"{weak_exit_time}: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
     
     def safety_exit_all(self):
+        # Get exit time from configuration
+        safety_exit_time = self.trading_hours.safety_exit_time
+        hedge_exit_time = self.trading_hours.hedge_force_exit_time
         
-        print("Safety exit all positions at 3:35 PM")
+        print(f"Safety exit all positions at {safety_exit_time}")
         if self.position_active:
-            print("3:35 PM Safety Exit: Closing all positions")
+            print(f"{safety_exit_time} Safety Exit: Closing all positions")
             self.close_position('safety_exit', self.position_shares)
         
-        # Close hedge if active
         if self.hedge_active:
-            print("3:35 PM Safety Exit: Closing hedge positions")
+            print(f"{hedge_exit_time} Safety Exit: Closing hedge positions")
             self.close_hedge()
     
     def market_on_close_exit(self):
@@ -378,11 +522,7 @@ class Strategy:
         if self.position_active:
             print("4:00 PM Market-On-Close: Closing remaining positions")
             self.close_position('market_on_close', self.position_shares)
-        
-        # Close hedge if active
-        # if self.hedge_active:
-        #     print("4:00 PM Market-On-Close: Closing hedge positions")
-        #     self.close_hedge()
+
         
     
     def fetch_data_by_timeframe(self):
@@ -740,9 +880,9 @@ class Strategy:
         print(f"Additional Checks Passed: {self.additional_checks_passed}")
         
         # Both conditions must be met to place an order
-        if self.score >= creds.RISK_CONFIG.alpha_score_threshold: 
+        # if self.score >= creds.RISK_CONFIG.alpha_score_threshold: 
             # Use this condition for now for all orders to get executed 
-        # if self.score >= creds.RISK_CONFIG.alpha_score_threshold and bool(self.additional_checks_passed):
+        if self.score >= creds.RISK_CONFIG.alpha_score_threshold and bool(self.additional_checks_passed):
             print(f"ENTERING POSITION - Both Alpha Score >= {creds.RISK_CONFIG.alpha_score_threshold} AND additional checks passed")
             shares, entry_price, stop_loss, limit_price = self.calculate_position_size()
             if shares > 0:
@@ -753,6 +893,13 @@ class Strategy:
                 print(f"  - Stop Loss: ${stop_loss:.2f}")
                 print(f"  - Exit: Market-On-Close at 4:00 PM ET")
                 
+                with self.manager.manager_lock:
+                    if self.manager.available_capital < shares * entry_price:
+                        print(f"Not enough available capital to place order for {self.stock}")
+                        return
+                    else:
+                        print(f"Enough available capital to place order for {self.stock}")
+
                 trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="LIMIT", price=round(limit_price, 2), side="BUY")
                 if int(trade[1]) == -1:
                     print(f"Unable to place order for {self.stock}")
@@ -764,13 +911,14 @@ class Strategy:
                     print(f"Order placed for {self.stock}: {trade}")
                     with self.manager.manager_lock:
                         self.used_capital += shares * trade[1]
-                        self.used_margin = shares * trade[1]
-                        print(f"Used Margin: ${self.used_margin:.2f}")
+                        self.manager.available_capital -= shares * trade[1]
+                        self.manager.used_capital += shares * trade[1]
                         print(f"Used Capital: ${self.used_capital:.2f}")
+                        print(f"Available Capital: ${self.manager.available_capital:.2f}")
 
                     self.entry_price = trade[1]
                     self.stop_loss_price = stop_loss
-                    self.take_profit_price = entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
+                    self.take_profit_price = self.entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
                     self.position_shares = shares
                     self.position_active = True
                     self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
@@ -792,6 +940,7 @@ class Strategy:
                     trades_db.update_strategy_data(self.stock,
                         position_active=True,
                         position_shares=shares,
+                        shares=shares,
                         entry_price=self.entry_price,
                         stop_loss_price=self.stop_loss_price,
                         take_profit_price=self.take_profit_price,
@@ -799,7 +948,7 @@ class Strategy:
                         current_price=self.current_price,
                         unrealized_pnl=self.unrealized_pnl,
                         realized_pnl=self.realized_pnl,
-                        used_margin=self.used_margin
+                        used_capital=self.used_capital
                     )
         else:
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
@@ -814,11 +963,15 @@ class Strategy:
             central_tz = pytz.timezone(self.trading_hours.timezone)
             current_time = datetime.now(central_tz).time()
 
-            if current_time >= dtime(15, 30) and current_time < dtime(15, 35):
+            # Get exit times from configuration
+            weak_exit_time = self.time_str_to_datetime(self.trading_hours.weak_exit_time)
+            safety_exit_time = self.time_str_to_datetime(self.trading_hours.safety_exit_time)
+
+            if current_time >= weak_exit_time and current_time < safety_exit_time:
                 self.end_of_day_weak_exit()
                 break
 
-            elif current_time >= dtime(15, 35):
+            elif current_time >= safety_exit_time:
                 self.safety_exit_all()
                 break
                         
@@ -868,7 +1021,7 @@ class Strategy:
             # Calculate current unrealized PnL
             self.unrealized_pnl = (self.current_price - self.entry_price) * self.position_shares
             with self.manager.manager_lock:
-                self.manager.unrealized_pnl = self.unrealized_pnl
+                self.manager.unrealized_pnl -= self.unrealized_pnl
             
             # Calculate current gain/loss percentage
             current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
@@ -880,6 +1033,10 @@ class Strategy:
                 return
             
             self.check_take_profit()
+            
+            # Check hedge exit conditions and scale down if needed
+            if self.hedge_active:
+                self.scale_down_hedge()
 
             if self.manager.stop_event.is_set():
                 self.close_position('drawdown')
@@ -998,14 +1155,6 @@ class Strategy:
 
     
     def close_position(self, reason, shares_to_sell=None):
-        """
-        Close position (either partial or full)
-        
-        Args:
-            reason: Reason for closing ('stop_loss', 'profit_booking', 'trailing_exit', etc.)
-            shares_to_sell: Number of shares to sell (None for all remaining shares)
-        """
-
         current_price = self.broker.get_current_price(self.stock)
         
         if shares_to_sell is None:
@@ -1028,6 +1177,15 @@ class Strategy:
         if trade is None:
             print(f"Unable to place order for {self.stock}")
             return
+        
+        with self.manager.manager_lock:
+            self.manager.available_capital += trade[1] * shares_to_sell
+            self.manager.used_capital -= trade[1] * shares_to_sell
+            self.used_capital -= trade[1] * shares_to_sell
+            print(f"Available Capital after closing position: ${self.manager.available_capital:.2f}")
+            print(f"Used Capital after closing position: ${self.used_capital:.2f}")
+            print(f"Used Total Capital after closing position: ${self.manager.used_capital:.2f}")
+
         # Update remaining shares
         realized_pnl = (trade[1] - self.entry_price) * shares_to_sell
         self.position_shares -= shares_to_sell
@@ -1048,8 +1206,9 @@ class Strategy:
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
-                self.manager.unrealized_pnl = 0
+                self.manager.unrealized_pnl -= realized_pnl
                 self.unrealized_pnl = 0
+                self.realized_pnl += realized_pnl
 
             # Calculate position duration
             if self.entry_time:
@@ -1069,9 +1228,10 @@ class Strategy:
                 trades_db.update_strategy_data(self.stock,  
                     position_active=False,
                     position_shares=0,
-                    realized_pnl=self.manager.realized_pnl,
+                    realized_pnl=self.realized_pnl,
                     unrealized_pnl=0,
-                    current_price=current_price
+                    current_price=current_price,
+                    used_capital=self.used_capital
                 )
         else:
             # Partial position closure
@@ -1082,14 +1242,16 @@ class Strategy:
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
-                self.manager.unrealized_pnl = self.unrealized_pnl
+                self.manager.unrealized_pnl -= realized_pnl
+                self.realized_pnl += realized_pnl
                 
             # Update database with partial position closure
             trades_db.update_strategy_data(self.stock,
                 position_shares=self.position_shares,
                 unrealized_pnl=self.unrealized_pnl,
-                realized_pnl=self.manager.realized_pnl,
-                current_price=current_price
+                realized_pnl=self.realized_pnl,
+                current_price=current_price,
+                used_capital=self.used_capital
             ) 
     
     def _check_profit_booking(self, current_gain_pct, current_price):
@@ -1193,12 +1355,16 @@ class Strategy:
                 central_tz = pytz.timezone(self.trading_hours.timezone)
                 current_time = datetime.now(central_tz).time()
 
-                if current_time >= dtime(15, 30) and current_time < dtime(15, 35):
+                # Get exit times from configuration
+                weak_exit_time = self.time_str_to_datetime(self.trading_hours.weak_exit_time)
+                safety_exit_time = self.time_str_to_datetime(self.trading_hours.safety_exit_time)
+
+                if current_time >= weak_exit_time and current_time < safety_exit_time:
                     print("Weak Exit")
                     self.end_of_day_weak_exit()
                     break
 
-                elif current_time >= dtime(15, 35):
+                elif current_time >= safety_exit_time:
                     print("All exit")
                     self.safety_exit_all()
                     break
@@ -1477,6 +1643,7 @@ class StrategyManager:
         self.config = creds
         self.selector = StockSelector()
         self.manager_lock = threading.Lock()
+        self.available_capital = creds.EQUITY
         self.used_capital = 0
         self.realized_pnl = 0
         self.unrealized_pnl = 0
@@ -1499,7 +1666,7 @@ class StrategyManager:
             current_price=0,
             unrealized_pnl=0,
             realized_pnl=0,
-            used_margin=0                                
+            used_capital=0                                
         )
         
         # List to track stocks that pass all entry conditions
@@ -1652,6 +1819,10 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
+    # Backup existing database before starting
+    print("Checking for existing database to backup...")
+    trades_db.backup_database()
+    
     # fetch_marketcap_csv()
     manager = StrategyManager()
     manager.run()

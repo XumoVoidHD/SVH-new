@@ -1,7 +1,9 @@
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import os
+import shutil
 
 class TradesDatabase:
     def __init__(self, db_path='trades.db'):
@@ -26,11 +28,12 @@ class TradesDatabase:
                     additional_checks_passed BOOLEAN DEFAULT FALSE,
                     position_active BOOLEAN DEFAULT FALSE,
                     position_shares INTEGER DEFAULT 0,
+                    shares INTEGER DEFAULT 0,
                     current_price REAL DEFAULT 0,
                     entry_price REAL DEFAULT 0,
                     stop_loss_price REAL DEFAULT 0,
                     take_profit_price REAL DEFAULT 0,
-                    used_margin REAL DEFAULT 0,
+                    used_capital REAL DEFAULT 0,
                     unrealized_pnl REAL DEFAULT 0,
                     realized_pnl REAL DEFAULT 0,
                     entry_time TIMESTAMP,
@@ -63,6 +66,170 @@ class TradesDatabase:
             conn.commit()
             conn.close()
     
+    def backup_database(self):
+        """Backup the current database to historical_data folder with date-based naming"""
+        if not os.path.exists(self.db_path):
+            return False
+            
+        # Create historical_data directory if it doesn't exist
+        historical_dir = "historical_data"
+        if not os.path.exists(historical_dir):
+            os.makedirs(historical_dir)
+        
+        # Get current date
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Create backup filename
+        backup_filename = f"trades_{current_date}.db"
+        backup_path = os.path.join(historical_dir, backup_filename)
+        
+        # If backup already exists for today, add timestamp
+        if os.path.exists(backup_path):
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            backup_filename = f"trades_{timestamp}.db"
+            backup_path = os.path.join(historical_dir, backup_filename)
+        
+        try:
+            # Copy the database file
+            shutil.copy2(self.db_path, backup_path)
+            print(f"Database backed up to: {backup_path}")
+            return True
+        except Exception as e:
+            print(f"Error backing up database: {e}")
+            return False
+    
+    def get_historical_databases(self):
+        """Get list of all historical database files"""
+        historical_dir = "historical_data"
+        if not os.path.exists(historical_dir):
+            return []
+        
+        historical_files = []
+        for filename in os.listdir(historical_dir):
+            if filename.startswith("trades_") and filename.endswith(".db"):
+                file_path = os.path.join(historical_dir, filename)
+                file_stat = os.stat(file_path)
+                historical_files.append({
+                    'filename': filename,
+                    'path': file_path,
+                    'date': filename.replace("trades_", "").replace(".db", ""),
+                    'size': file_stat.st_size,
+                    'modified': datetime.fromtimestamp(file_stat.st_mtime)
+                })
+        
+        # Sort by date (newest first)
+        historical_files.sort(key=lambda x: x['modified'], reverse=True)
+        return historical_files
+    
+    def load_historical_data(self, historical_db_path):
+        """Load data from a historical database file"""
+        if not os.path.exists(historical_db_path):
+            return None
+            
+        try:
+            conn = sqlite3.connect(historical_db_path)
+            cursor = conn.cursor()
+            
+            # Get all strategy data
+            cursor.execute('SELECT * FROM stock_strategies')
+            rows = cursor.fetchall()
+            
+            # Get column names
+            columns = [description[0] for description in cursor.description]
+            
+            conn.close()
+            
+            # Convert to list of dictionaries
+            data = []
+            for row in rows:
+                row_dict = dict(zip(columns, row))
+                # Convert boolean fields from SQLite integers to Python booleans
+                boolean_fields = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+                for field in boolean_fields:
+                    if field in row_dict and row_dict[field] is not None:
+                        row_dict[field] = bool(row_dict[field])
+                data.append(row_dict)
+            
+            return data
+        except Exception as e:
+            print(f"Error loading historical data from {historical_db_path}: {e}")
+            return None
+    
+    def get_aggregated_data(self, start_date=None, end_date=None):
+        """Get aggregated data from historical databases within a date range
+        
+        Args:
+            start_date: Start date (datetime object or string in YYYY-MM-DD format)
+            end_date: End date (datetime object or string in YYYY-MM-DD format)
+        
+        Returns:
+            List of aggregated data records
+        """
+        historical_files = self.get_historical_databases()
+        
+        if not historical_files:
+            return []
+        
+        # Convert string dates to datetime objects if needed
+        if isinstance(start_date, str):
+            try:
+                start_date = datetime.strptime(start_date, '%Y-%m-%d')
+            except ValueError:
+                print(f"Invalid start_date format: {start_date}. Expected YYYY-MM-DD")
+                return []
+                
+        if isinstance(end_date, str):
+            try:
+                end_date = datetime.strptime(end_date, '%Y-%m-%d')
+            except ValueError:
+                print(f"Invalid end_date format: {end_date}. Expected YYYY-MM-DD")
+                return []
+        
+        # If no dates provided, return all data
+        if start_date is None and end_date is None:
+            filtered_files = historical_files
+        else:
+            filtered_files = []
+            for file_info in historical_files:
+                # Extract date from filename (trades_YYYY-MM-DD_HH-MM-SS.db or trades_YYYY-MM-DD.db)
+                filename_date_str = file_info['date']  # This is already extracted in get_historical_databases
+                
+                # Parse the date part (handle both formats)
+                try:
+                    # Try parsing with time first (YYYY-MM-DD_HH-MM-SS)
+                    if '_' in filename_date_str and len(filename_date_str.split('_')[1]) > 0:
+                        file_date = datetime.strptime(filename_date_str.split('_')[0], '%Y-%m-%d')
+                    else:
+                        # Just date (YYYY-MM-DD)
+                        file_date = datetime.strptime(filename_date_str, '%Y-%m-%d')
+                    
+                    # Check if file date is within range
+                    include_file = True
+                    if start_date is not None and file_date < start_date:
+                        include_file = False
+                    if end_date is not None and file_date > end_date:
+                        include_file = False
+                    
+                    if include_file:
+                        filtered_files.append(file_info)
+                        
+                except ValueError:
+                    # Skip files with invalid date formats
+                    print(f"Skipping file with invalid date format: {file_info['filename']}")
+                    continue
+        
+        all_data = []
+        for file_info in filtered_files:
+            data = self.load_historical_data(file_info['path'])
+            if data:
+                # Add date info to each record
+                for record in data:
+                    record['data_date'] = file_info['date']
+                    record['data_file'] = file_info['filename']
+                all_data.extend(data)
+        
+        return all_data
+    
     def add_stocks_from_list(self, stock_list):
         """Add multiple stocks from a list"""
         with self.lock:
@@ -92,8 +259,8 @@ class TradesDatabase:
             for key, value in kwargs.items():
                 if key in [
                     'score', 'additional_checks_passed', 'position_active',
-                    'position_shares', 'current_price', 'entry_price', 
-                    'stop_loss_price', 'take_profit_price', 'used_margin', 
+                    'position_shares', 'shares', 'current_price', 'entry_price', 
+                    'stop_loss_price', 'take_profit_price', 'used_capital', 
                     'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
                     'profit_booking_levels',
                     'trailing_exit_conditions', 'trailing_stop_levels',
@@ -147,8 +314,8 @@ class TradesDatabase:
         for key, value in kwargs.items():
             if key in [
                 'score', 'additional_checks_passed', 'position_active',
-                'position_shares', 'current_price', 'entry_price', 
-                'stop_loss_price', 'take_profit_price', 'used_margin', 
+                'position_shares', 'shares', 'current_price', 'entry_price', 
+                'stop_loss_price', 'take_profit_price', 'used_capital', 
                 'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
                 'profit_booking_levels',
                 'trailing_exit_conditions', 'trailing_stop_levels',
@@ -227,7 +394,7 @@ class TradesDatabase:
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT symbol, position_shares, entry_price, current_price, 
+                SELECT symbol, position_shares, shares, entry_price, current_price, 
                        stop_loss_price, take_profit_price, unrealized_pnl, realized_pnl, entry_time
                 FROM stock_strategies 
                 WHERE position_active = 1
@@ -236,7 +403,7 @@ class TradesDatabase:
             rows = cursor.fetchall()
             conn.close()
             
-            columns = ['symbol', 'position_shares', 'entry_price', 'current_price', 
+            columns = ['symbol', 'position_shares', 'shares', 'entry_price', 'current_price', 
                       'stop_loss_price', 'take_profit_price', 'unrealized_pnl', 'realized_pnl', 'entry_time']
             
             return [dict(zip(columns, row)) for row in rows]
@@ -253,6 +420,7 @@ class TradesDatabase:
                     score,
                     position_active,
                     position_shares,
+                    shares,
                     current_price,
                     entry_price,
                     unrealized_pnl,
@@ -268,7 +436,7 @@ class TradesDatabase:
             rows = cursor.fetchall()
             conn.close()
             
-            columns = ['symbol', 'score', 'position_active', 'position_shares', 
+            columns = ['symbol', 'score', 'position_active', 'position_shares', 'shares',
                       'current_price', 'entry_price', 'unrealized_pnl', 'realized_pnl', 'total_trades', 
                       'winning_trades', 'losing_trades', 'total_pnl']
             

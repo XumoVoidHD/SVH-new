@@ -175,7 +175,17 @@
             "vix_threshold": 22,
             "sp500_drop_threshold": 0.012
         },
+        "exit_conditions": {
+            "vix_exit_threshold": 20,
+            "vix_slope_period": 10,
+            "sp500_recovery_threshold": 0.006,
+            "qqq_vwap_consecutive_bars": 2
+        },
         "hedge_levels": {
+            "early": {
+                "beta": 0.1,
+                "description": "Early hedge: Single risk indicator triggered"
+            },
             "mild": {
                 "beta": 0.15,
                 "description": "Mild hedge: VIX elevated but market stable"
@@ -214,6 +224,9 @@
         "morning_entry_start": "9:00",
         "morning_entry_end": "11:15",
         "afternoon_entry_start": "13:30",
-        "afternoon_entry_end": "14:30"
+        "afternoon_entry_end": "14:30",
+        "weak_exit_time": "15:30",
+        "hedge_force_exit_time": "15:55",
+        "safety_exit_time": "15:55"
     }
 }
