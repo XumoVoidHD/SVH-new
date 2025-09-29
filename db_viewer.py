@@ -1058,17 +1058,14 @@ def main():
                                     avg_score = df['score'].mean()
                                     st.metric("Avg Score", f"{avg_score:.2f}")
                                 
-                                # Filter to show only active positions for simplified view
-                                if 'position_active' in df.columns:
-                                    simplified_df = df[df['position_active'] == True].copy()
-                                else:
-                                    simplified_df = df.copy()
+                                # Show all positions for simplified view (both active and inactive)
+                                simplified_df = df.copy()
                                 
                                 if not simplified_df.empty:
-                                    # Create simplified DataFrame with calculated columns
+                                    # Create simplified display format (same as Top Performing Symbols)
                                     simplified_display = pd.DataFrame({
                                         'Symbol': simplified_df['symbol'],
-                                        'Quantity': simplified_df['position_shares'],
+                                        'Quantity': simplified_df['shares'],
                                         'Entry Price': simplified_df['entry_price'],
                                         'Current Price': simplified_df['current_price'],
                                         'Unrealized PnL': simplified_df['unrealized_pnl'],
@@ -1076,29 +1073,36 @@ def main():
                                     })
                                     
                                     # Ensure numeric types for calculations
-                                    simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce')
-                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
-                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
-                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
-                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
+                                    simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce').fillna(0)
+                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce').fillna(0)
+                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce').fillna(0)
+                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce').fillna(0)
+                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce').fillna(0)
                                     
                                     # Calculate additional columns
                                     simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
                                     simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
-                                    simplified_display['Avg Price'] = simplified_display['Entry Price']  # Same as entry price for simplicity
+                                    simplified_display['Avg Price'] = simplified_display['Entry Price']
                                     simplified_display['Last Price'] = simplified_display['Current Price']
                                     
                                     # Calculate total PnL (unrealized + realized)
                                     total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
                                     simplified_display['Open Gain/Loss ($)'] = total_pnl
                                     
-                                    # Calculate percentage based on total PnL relative to cost basis
-                                    simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                                    # Calculate percentage based on total PnL relative to cost basis (handle division by zero)
+                                    simplified_display['Open Gain/Loss (%)'] = simplified_display.apply(
+                                        lambda row: (row['Open Gain/Loss ($)'] / row['Cost Basis'] * 100) if row['Cost Basis'] != 0 else 0, 
+                                        axis=1
+                                    ).round(2)
                                     
-                                    # Select and reorder columns for display
+                                    # Add Avg Score column
+                                    simplified_display['Avg Score'] = simplified_df['score']
+                                    
+                                    # Select and reorder columns for display (same as Top Performing Symbols)
                                     display_columns = [
                                         'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
-                                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
+                                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)',
+                                        'Avg Score'
                                     ]
                                     simplified_display = simplified_display[display_columns]
                                     
@@ -1121,6 +1125,7 @@ def main():
                                     formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
                                     formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
                                     formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
+                                    formatted_display['Avg Score'] = formatted_display['Avg Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
                                     
                                     # Display the formatted table
                                     st.dataframe(formatted_display, use_container_width=True)

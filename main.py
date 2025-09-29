@@ -270,7 +270,7 @@ class Strategy:
                 print(f"Unable to get {self.hedge_symbol} price for hedge")
                 return
             
-            # Calculate shares to short
+            # Calculate shares to buy
             hedge_shares = int(hedge_amount / xlf_price)
 
             trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=xlf_price, side="BUY")
@@ -281,7 +281,7 @@ class Strategy:
             print(f"Executing {hedge_level} hedge:")
             print(f"  - Hedge amount: ${hedge_amount:,.0f} ({beta*100:.1f}% of equity)")
             print(f"  - {self.hedge_symbol} price: ${trade[1]}")
-            print(f"  - Shares to short: {hedge_shares}")
+            print(f"  - Shares to buy: {hedge_shares}")
             
             # Update hedge status and track hedge position
             self.hedge_active = True
@@ -299,7 +299,7 @@ class Strategy:
                 hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
             )
             
-            print(f"Hedge executed: Short {hedge_shares} shares of {self.hedge_symbol}")
+            print(f"Hedge executed: Buy {hedge_shares} shares of {self.hedge_symbol}")
             print(f"Hedge position tracked in database for {self.stock}")
                 
         except Exception as e:
@@ -448,7 +448,7 @@ class Strategy:
             return
         
         try:
-            print(f"Closing hedge: Buying back {self.hedge_shares} shares of {self.hedge_symbol}")
+            print(f"Closing hedge: Selling {self.hedge_shares} shares of {self.hedge_symbol}")
             
             # Get current XLF price for P&L calculation
             current_xlf_price = self.broker.get_current_price(self.hedge_symbol)
@@ -456,10 +456,10 @@ class Strategy:
                 print(f"Unable to get current {self.hedge_symbol} price for P&L calculation")
                 current_xlf_price = 0
             
-            # Calculate hedge P&L (profit from short position)
+            # Calculate hedge P&L (profit from long position)
             hedge_pnl = 0
             if hasattr(self, 'hedge_entry_price') and self.hedge_entry_price:
-                hedge_pnl = (self.hedge_entry_price - current_xlf_price) * self.hedge_shares
+                hedge_pnl = (current_xlf_price - self.hedge_entry_price) * self.hedge_shares
             
             trade = self.broker.place_order(symbol=self.hedge_symbol, qty=self.hedge_shares, order_type="MARKET", price=current_xlf_price, side="SELL")
             if trade is None:
@@ -1180,8 +1180,9 @@ class Strategy:
         
         with self.manager.manager_lock:
             self.manager.available_capital += trade[1] * shares_to_sell
-            self.manager.used_capital -= trade[1] * shares_to_sell
-            self.used_capital -= trade[1] * shares_to_sell
+            original_cost = self.entry_price * shares_to_sell
+            self.manager.used_capital -= original_cost
+            self.used_capital -= original_cost
             print(f"Available Capital after closing position: ${self.manager.available_capital:.2f}")
             print(f"Used Capital after closing position: ${self.used_capital:.2f}")
             print(f"Used Total Capital after closing position: ${self.manager.used_capital:.2f}")
