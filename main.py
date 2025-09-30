@@ -474,7 +474,7 @@ class Strategy:
             trades_db.update_strategy_data(self.stock,
                 hedge_active=False,
                 hedge_shares=0,
-                hedge_exit_price=current_xlf_price,
+                hedge_exit_price=current_hedge_price,
                 hedge_exit_time=datetime.now(pytz.timezone('America/Chicago')),
                 hedge_pnl=hedge_pnl
             )
