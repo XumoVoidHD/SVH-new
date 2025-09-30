@@ -318,20 +318,20 @@ def main():
                     
                     st.markdown("---")
                 
-                # Show only active positions for simplified view
-                if 'position_active' in df.columns:
+                # Add filter option for showing only active positions
+                show_live_only = st.checkbox("Show live positions only", value=False, key="show_live_positions_simplified")
+                
+                # Filter positions based on checkbox
+                if show_live_only and 'position_active' in df.columns:
                     simplified_df = df[df['position_active'] == True].copy()
-                    if simplified_df.empty:
-                        st.info("No active positions found in the database.")
-                        st.markdown("**Note:** This view shows only active positions. Switch to the 'Raw Database' tab to see all positions including closed ones.")
                 else:
                     simplified_df = df.copy()
-                    st.warning("No 'position_active' column found. Showing all positions.")
                 
                 if not simplified_df.empty:
                     # Create simplified DataFrame with calculated columns
                     simplified_display = pd.DataFrame({
                         'Symbol': simplified_df['symbol'],
+                        'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
                         'Quantity': simplified_df['position_shares'],
                         'Entry Price': simplified_df['entry_price'],
                         'Current Price': simplified_df['current_price'],
@@ -361,7 +361,7 @@ def main():
                     
                     # Select and reorder columns for display
                     display_columns = [
-                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                        'Symbol', 'Active', 'Quantity', 'Cost Basis', 'Market Value', 
                         'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
                     ]
                     simplified_display = simplified_display[display_columns]
@@ -959,7 +959,7 @@ def main():
                             except Exception as e:
                                 st.error(f"Error deleting file: {str(e)}")
                     
-                    # Display table of all files
+                # Display table of all files
                 file_data = []
                 for file_info in historical_files:
                     file_data.append({
@@ -1065,6 +1065,7 @@ def main():
                                     # Create simplified display format (same as Top Performing Symbols)
                                     simplified_display = pd.DataFrame({
                                         'Symbol': simplified_df['symbol'],
+                                        'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
                                         'Quantity': simplified_df['shares'],
                                         'Entry Price': simplified_df['entry_price'],
                                         'Current Price': simplified_df['current_price'],
@@ -1100,7 +1101,7 @@ def main():
                                     
                                     # Select and reorder columns for display (same as Top Performing Symbols)
                                     display_columns = [
-                                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                                        'Symbol', 'Active', 'Quantity', 'Cost Basis', 'Market Value', 
                                         'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)',
                                         'Avg Score'
                                     ]
