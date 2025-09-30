@@ -1734,6 +1734,34 @@ def main():
                     format="%.3f"
                 )
             
+            # Dynamic Drawdown Limits
+            st.markdown("---")
+            st.write("**Dynamic Daily Limit Configuration**")
+            st.markdown("*Dynamic limit = min(lower_limit, 1.5 × Portfolio ATR14, upper_limit)*")
+            col1, col2 = st.columns(2)
+            with col1:
+                lower_limit = st.number_input(
+                    "Lower Limit (%):", 
+                    min_value=0.001, 
+                    max_value=0.05, 
+                    value=risk_config.get('lower_limit', 0.02), 
+                    step=0.001, 
+                    key="lower_limit", 
+                    format="%.3f",
+                    help="Minimum daily drawdown limit (e.g., 0.02 = 2% of equity)"
+                )
+            with col2:
+                upper_limit = st.number_input(
+                    "Upper Limit (%):", 
+                    min_value=0.001, 
+                    max_value=0.10, 
+                    value=risk_config.get('upper_limit', 0.03), 
+                    step=0.001, 
+                    key="upper_limit", 
+                    format="%.3f",
+                    help="Maximum daily drawdown limit cap (e.g., 0.03 = 3% of equity)"
+                )
+            
             # Order Configuration
             st.markdown("---")
             st.write("**Order Configuration**")
@@ -2369,7 +2397,9 @@ def main():
                     "max_daily_trades": max_daily_trades,
                     "daily_drawdown_limit": daily_drawdown,
                     "monthly_drawdown_limit": monthly_drawdown,
-                    "drawdown_alert": drawdown_alert
+                    "drawdown_alert": drawdown_alert,
+                    "lower_limit": lower_limit,
+                    "upper_limit": upper_limit
                 },
                 "STOP_LOSS_CONFIG": {
                     "default_stop_loss": default_stop,

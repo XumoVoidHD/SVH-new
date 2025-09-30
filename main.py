@@ -200,36 +200,150 @@ class Strategy:
         
         return hedge_level, beta
     
+    def calculate_sharpe_ratio(self, days=30):
+        try:
+            # Get historical price data for this stock
+            historical_data = self.broker.get_historical_data(
+                stock=self.stock, 
+                bar_size="1 day", 
+                duration=f"{days + 5} D"  # Get a few extra days to ensure we have enough
+            )
+            
+            if historical_data is None or historical_data.empty:
+                print(f"[Sharpe] {self.stock}: No historical data available")
+                return 0.0
+            
+            if len(historical_data) < 5:
+                print(f"[Sharpe] {self.stock}: Insufficient data ({len(historical_data)} < 5 days)")
+                return 0.0
+            
+            # Calculate daily returns
+            closes = historical_data['close'].values
+            daily_returns = []
+            
+            for i in range(1, len(closes)):
+                daily_return = (closes[i] - closes[i-1]) / closes[i-1]
+                daily_returns.append(daily_return)
+            
+            if len(daily_returns) < 5:
+                print(f"[Sharpe] {self.stock}: Insufficient returns ({len(daily_returns)} < 5)")
+                return 0.0
+            
+            # Calculate mean and std of returns
+            mean_return = sum(daily_returns) / len(daily_returns)
+            variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
+            std_return = variance ** 0.5
+            
+            if std_return == 0:
+                print(f"[Sharpe] {self.stock}: Zero volatility")
+                return 0.0
+            
+            # Sharpe ratio (assuming risk-free rate = 0 for simplicity)
+            sharpe = mean_return / std_return
+            
+            # Annualize the Sharpe ratio (optional: multiply by sqrt(252) for trading days)
+            annualized_sharpe = sharpe * (252 ** 0.5)
+            
+            print(f"[Sharpe] {self.stock}: {annualized_sharpe:.2f} annualized (daily: {sharpe:.2f}, mean ret: {mean_return*100:.3f}%, std: {std_return*100:.3f}%, n={len(daily_returns)})")
+            
+            return sharpe
+            
+        except Exception as e:
+            print(f"[Sharpe] Error for {self.stock}: {e}")
+            traceback.print_exc()
+            return 0.0
+    
+    def calculate_10day_drawdown(self):
+        try:
+            # Get historical price data for this stock
+            historical_data = self.broker.get_historical_data(
+                stock=self.stock, 
+                bar_size="1 day", 
+                duration="15 D"  # Get 15 days to ensure we have at least 10
+            )
+            
+            if historical_data is None or historical_data.empty:
+                print(f"[DD-10d] {self.stock}: No historical data available")
+                return 0.0
+            
+            if len(historical_data) < 2:
+                print(f"[DD-10d] {self.stock}: Insufficient data ({len(historical_data)} < 2 days)")
+                return 0.0
+            
+            # Get last 10 days of close prices
+            closes = historical_data['close'].values[-10:] if len(historical_data) >= 10 else historical_data['close'].values
+            
+            # Calculate maximum drawdown
+            peak = closes[0]
+            max_drawdown = 0.0
+            
+            for price in closes:
+                if price > peak:
+                    peak = price
+                drawdown = (peak - price) / peak if peak > 0 else 0.0
+                max_drawdown = max(max_drawdown, drawdown)
+            
+            print(f"[DD-10d] {self.stock}: {max_drawdown*100:.2f}% (peak=${peak:.2f}, current=${closes[-1]:.2f}, n={len(closes)} days)")
+            
+            return max_drawdown
+            
+        except Exception as e:
+            print(f"[DD-10d] Error for {self.stock}: {e}")
+            traceback.print_exc()
+            return 0.0
+    
     def check_leverage_conditions(self):
-        """Check if leverage conditions are met and return leverage multiplier"""
         if not self.leverage_config.enabled:
             return 1.0
         
         conditions_met = 0
-        total_conditions = 3  # Alpha Score, VIX, Drawdown (VIX trend is bonus)
+        total_conditions = 4  # Alpha, VIX, Sharpe, Drawdown
         condition_details = []
         
         try:
-            # Check Alpha Score condition
-            if self.score >= self.leverage_config.conditions.alpha_score_min:
+            # 1. Check Alpha ≥ 85
+            if self.score >= 85:
                 conditions_met += 1
-                condition_details.append(f"Alpha Score {self.score} ≥ {self.leverage_config.conditions.alpha_score_min}")
+                condition_details.append(f"Alpha {self.score} ≥ 85")
+            else:
+                condition_details.append(f"Alpha {self.score} < 85")
             
-            # Check VIX condition
-            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size=3)
+            # 2. Check VIX < 18 and falling
+            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size="1 day", duration="30 D")
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
-                if current_vix < self.leverage_config.conditions.vix_max:
-                    conditions_met += 1
-                    condition_details.append(f"VIX {current_vix:.1f} < {self.leverage_config.conditions.vix_max}")
                 
-                # Check VIX trend (10-day declining)
-                if len(vix_data) >= self.leverage_config.conditions.vix_trend_days:
-                    vix_10d_ago = vix_data['close'].iloc[-self.leverage_config.conditions.vix_trend_days]
-                    if current_vix < vix_10d_ago:
-                        condition_details.append(f"VIX trending down over {self.leverage_config.conditions.vix_trend_days} days")
+                if current_vix < 18:
+                    # Check if falling (vs 10 days ago)
+                    if len(vix_data) >= 10:
+                        vix_10d_ago = vix_data['close'].iloc[-10]
+                        if current_vix < vix_10d_ago:
+                            conditions_met += 1
+                            condition_details.append(f"VIX {current_vix:.1f} < 18 & falling")
+                        else:
+                            condition_details.append(f"VIX {current_vix:.1f} < 18 but rising")
+                    else:
+                        condition_details.append(f"VIX history insufficient")
+                else:
+                    condition_details.append(f"VIX {current_vix:.1f} ≥ 18")
             else:
-                print(f"VIX data unavailable or empty for leverage condition check")
+                condition_details.append(f"VIX data unavailable")
+            
+            # 3. Check Sharpe ratio > 2.5 (for this stock, last 30 days)
+            sharpe = self.calculate_sharpe_ratio(days=30)
+            if sharpe > 2.5:
+                conditions_met += 1
+                condition_details.append(f"Sharpe {sharpe:.2f} > 2.5")
+            else:
+                condition_details.append(f"Sharpe {sharpe:.2f} ≤ 2.5")
+            
+            # 4. Check 10-day drawdown < 2% (for this stock)
+            drawdown_10d = self.calculate_10day_drawdown()
+            if drawdown_10d < 0.02:
+                conditions_met += 1
+                condition_details.append(f"10d DD {drawdown_10d*100:.1f}% < 2%")
+            else:
+                condition_details.append(f"10d DD {drawdown_10d*100:.1f}% ≥ 2%")
              
         except Exception as e:
             print(f"Error checking leverage conditions: {e}")
@@ -237,20 +351,19 @@ class Strategy:
             return 1.0
         
         # Determine leverage level
-        conditions_pct = conditions_met / total_conditions
+        print(f"\n[Leverage Check] {self.stock}: {conditions_met}/{total_conditions} conditions met")
+        for detail in condition_details:
+            print(f"  {detail}")
         
-        if conditions_pct >= 1.0:  # All conditions met
-            leverage = self.leverage_config.leverage_levels.all_conditions_met
-            print(f"Leverage: All conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
-        elif conditions_pct >= 0.6:  # Most conditions met
-            leverage = self.leverage_config.leverage_levels.partial_conditions 
-            print(f"Leverage: Partial conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
+        if conditions_met == total_conditions:  # ALL conditions met
+            leverage = 2.0
+            print(f"All conditions met → 2.0x leverage")
+        elif conditions_met >= 3:  # Signals weakening
+            leverage = 1.2
+            print(f"Partial conditions → 1.2x leverage")
         else:
-            leverage = self.leverage_config.leverage_levels.default
-            print(f"Leverage: Few conditions met ({conditions_met}/{total_conditions}) - {leverage}x leverage")
-        
-        if condition_details:
-            print(f"Leverage conditions: {', '.join(condition_details)}")
+            leverage = 1.0
+            print(f"Few conditions → 1.0x (no leverage)")
         
         return leverage
     
@@ -783,26 +896,27 @@ class Strategy:
         return slope_ok 
         
     def calculate_position_size(self):
-        """Calculate position size based on risk management rules with hedge and leverage"""
         
-        # Step 1: Check hedge triggers and execute if needed
         hedge_level, hedge_beta = self.check_hedge_triggers()
         if hedge_level:
             self.execute_hedge(hedge_level, hedge_beta)
         
-        # Step 2: Check leverage conditions
         leverage_multiplier = self.check_leverage_conditions()
         self.current_leverage = leverage_multiplier
-
-        # leverage_multiplier = 1.0
-        # self.current_leverage = leverage_multiplier
         
-        # Get account equity from config
         account_equity = creds.EQUITY
         current_price = self.broker.get_current_price(self.stock)
         
-        # Each stock gets exactly risk_per_trade percentage of equity
-        risk_per_trade = creds.RISK_CONFIG.risk_per_trade
+        # Base risk per trade
+        base_risk_per_trade = creds.RISK_CONFIG.risk_per_trade
+        
+        # Apply leverage to risk_per_trade (NOT to shares)
+        risk_per_trade = base_risk_per_trade * leverage_multiplier
+        
+        print(f"\n[Position Sizing] {self.stock}")
+        print(f"  - Base risk: {base_risk_per_trade*100:.2f}%")
+        print(f"  - Leverage: {leverage_multiplier:.1f}x")
+        print(f"  - Adjusted risk: {risk_per_trade*100:.2f}%")
         
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
@@ -810,32 +924,30 @@ class Strategy:
         if risk_per_share <= 0:
             return 0, 0, 0, 0
         
-        # Calculate capital for trade based on risk_per_trade percentage
-        capital_for_trade = ((account_equity * risk_per_trade)/(stop_loss_pct/100))
+        # Calculate position size based on leveraged risk
+        capital_for_trade = (account_equity * risk_per_trade) / stop_loss_pct
+        
+        # Cap at max position equity percentage
         if capital_for_trade > (account_equity * creds.RISK_CONFIG.max_position_equity_pct):
             capital_for_trade = account_equity * creds.RISK_CONFIG.max_position_equity_pct
+            print(f"  - Position capped at {creds.RISK_CONFIG.max_position_equity_pct*100:.0f}% max equity")
         
-        # Calculate shares based on available capital
         shares = int(capital_for_trade / current_price)
         
-        # Apply leverage to all trades when conditions are met
+        # Track margin usage if leverage applied
         if leverage_multiplier > 1.0:
-            shares = int(shares * leverage_multiplier)
-            print(f"Applying {leverage_multiplier}x leverage: {shares} shares")
-            # Calculate margin used for leverage
-            base_cost = shares * current_price / leverage_multiplier
-            leveraged_cost = shares * current_price
-            self.margin_used_leverage = leveraged_cost - base_cost
-            print(f"Margin used for leverage: ${self.margin_used_leverage:,.0f}")
+            base_capital = (account_equity * base_risk_per_trade) / stop_loss_pct
+            self.margin_used_leverage = capital_for_trade - base_capital
+            print(f"  - Base capital: ${base_capital:,.0f}")
+            print(f"  - Leveraged capital: ${capital_for_trade:,.0f}")
+            print(f"  - Margin used: ${self.margin_used_leverage:,.0f}")
         else:
-            print("No leverage applied to this trade")
             self.margin_used_leverage = 0
+            print(f"  - No leverage applied")
         
-        # Ensure VWAP is below current price before using it
         data_3min = self.broker.get_historical_data(stock=self.stock, bar_size=3)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
         
-        # Check if VWAP is below current price (required condition)
         if vwap_value < current_price:
             print(f"VWAP (${vwap_value:.2f}) is below current price (${current_price:.2f})")
         else:
@@ -1008,17 +1120,13 @@ class Strategy:
                     self.start_individual_monitoring()
     
     def monitor_position(self):
-        """Monitor position for stop loss and take profit conditions"""
         try:
-            # Get current price and update tracking variables
             self.current_price = self.broker.get_current_price(self.stock)
             
-            # Check if current_price is None
             if self.current_price is None:
                 print(f"Unable to get current price for {self.stock} in position monitoring")
                 return
             
-            # Calculate current unrealized PnL
             self.unrealized_pnl = (self.current_price - self.entry_price) * self.position_shares
             with self.manager.manager_lock:
                 self.manager.unrealized_pnl -= self.unrealized_pnl
@@ -1026,7 +1134,6 @@ class Strategy:
             # Calculate current gain/loss percentage
             current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
             
-            # Check stop loss condition
             if self.current_price <= self.stop_loss_price:
                 print(f"STOP LOSS TRIGGERED: {self.stock} - Current: ${self.current_price:.2f}, Stop: ${self.stop_loss_price:.2f}")
                 self.close_position('stop_loss')
@@ -1034,7 +1141,6 @@ class Strategy:
             
             self.check_take_profit()
             
-            # Check hedge exit conditions and scale down if needed
             if self.hedge_active:
                 self.scale_down_hedge()
 
@@ -1049,7 +1155,6 @@ class Strategy:
             print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
             print(f"  - Take Profit: ${self.take_profit_price:.2f}")
             
-            # Update database with current position status
             trades_db.update_strategy_data(self.stock,
                 current_price=self.current_price,
                 unrealized_pnl=self.unrealized_pnl,
@@ -1064,23 +1169,18 @@ class Strategy:
     def check_take_profit(self):
         current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
 
-        # Profit Booking Logic - handled by _check_profit_booking method
         self._check_profit_booking(current_gain_pct, self.current_price)
         
-        # Trailing Stop Logic - handled by _check_trailing_stops method
         self._check_trailing_stops(current_gain_pct, self.current_price)
 
-        # Trailing Exit Logic using PROFIT_CONFIG
         trailing_conditions = creds.PROFIT_CONFIG.trailing_exit_conditions
         gain_threshold = trailing_conditions.gain_threshold
         drop_threshold = trailing_conditions.drop_threshold
         monitor_period = trailing_conditions.monitor_period
         
         if current_gain_pct >= gain_threshold:
-            # Start monitoring if not already started
             if not self.trailing_exit_monitoring:
                 self.trailing_exit_monitoring = True
-                # Get current time in USA Central Time
                 central_tz = pytz.timezone('America/Chicago')
                 self.trailing_exit_start_time = datetime.now(central_tz)
                 self.trailing_exit_start_price = self.current_price
@@ -1649,16 +1749,13 @@ class StrategyManager:
         self.realized_pnl = 0
         self.unrealized_pnl = 0
         self.stocks_list, self.stocks_dict = [], []
-        # Create stop event BEFORE starting the thread
         self.stop_event = threading.Event()
-        
-        # Add hedge symbol to database for hedging - all threads can use it
         hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
         print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
         trades_db.add_stocks_from_list([hedge_symbol])
         
         trades_db.update_strategy_data(hedge_symbol,
-            position_active=True,
+            position_active=False,
             position_shares=0,
             entry_price=0,
             stop_loss_price=0,
@@ -1676,25 +1773,80 @@ class StrategyManager:
         
         # Start drawdown monitoring thread AFTER everything is initialized
         drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
-        # drawdown_thread.start()
+        drawdown_thread.start()
+    
+    def calculate_portfolio_atr14(self):
+        try:
+            atr_values = []
+            active_count = 0
+            
+            for strategy in self.strategies:
+                if strategy.position_active and strategy.position_shares > 0:
+                    active_count += 1
+                    try:
+                        data_3min = self.broker.get_historical_data(stock=strategy.stock, bar_size=3)
+                        if data_3min is not None and not data_3min.empty:
+                            atr14 = atr.calc_atr(data_3min, 14)
+                            if atr14 is not None and not atr14.empty:
+                                atr_value = atr14.iloc[-1]
+                                current_price = strategy.current_price if strategy.current_price > 0 else data_3min['close'].iloc[-1]
+                                atr_pct = atr_value / current_price
+                                atr_values.append(atr_pct)
+                                print(f"[Portfolio ATR] {strategy.stock}: ATR14=${atr_value:.2f}, ATR%={atr_pct*100:.2f}%")
+                    except Exception as e:
+                        print(f"[Portfolio ATR] Error calculating ATR for {strategy.stock}: {e}")
+                        continue
+            
+            if atr_values:
+                portfolio_atr_pct = sum(atr_values) / len(atr_values)
+                print(f"[Portfolio ATR] Average ATR% across {len(atr_values)} positions: {portfolio_atr_pct*100:.2f}%")
+                return portfolio_atr_pct
+            else:
+                print(f"[Portfolio ATR] No active positions to calculate ATR (active_count={active_count})")
+                return 0.02
+                
+        except Exception as e:
+            print(f"[Portfolio ATR] Error in calculate_portfolio_atr14: {e}")
+            return 0.02 
+    
+    def calculate_dynamic_daily_limit(self):
+        equity = creds.EQUITY
+        
+        limit_2pct = equity * self.config.RISK_CONFIG.lower_limit
+        
+        portfolio_atr_pct = self.calculate_portfolio_atr14()
+        limit_atr = equity * (1.5 * portfolio_atr_pct)
+        
+        limit_3pct = equity * self.config.RISK_CONFIG.upper_limit
+        
+        daily_limit_dollars = min(limit_2pct, limit_atr, limit_3pct)
+        daily_limit_pct = daily_limit_dollars / equity
+        
+        print(f"[Dynamic Daily Limit]")
+        print(f"  - 2% equity: ${limit_2pct:,.0f}")
+        print(f"  - 1.5 x Portfolio ATR14: ${limit_atr:,.0f} (ATR={portfolio_atr_pct*100:.2f}%)")
+        print(f"  - 3% cap: ${limit_3pct:,.0f}")
+        print(f"  - Selected limit: ${daily_limit_dollars:,.0f} ({daily_limit_pct*100:.2f}%)")
+        
+        return daily_limit_dollars
     
     def monitor_drawdown_loop(self):
             print("Starting global drawdown monitoring thread.")
-            threshold = creds.EQUITY * creds.RISK_CONFIG.daily_drawdown_limit
-            self.max_drawdown_triggered = False  # Initialize the attribute
+            self.max_drawdown_triggered = False
             
             while not self.stop_event.is_set():
                 try:
-                    total_pnl = self.broker.get_total_pnl()  # Must return realized + unrealized
+                    total_pnl = self.broker.get_total_pnl()
+                    
+                    threshold = self.calculate_dynamic_daily_limit()
 
-                    print(f"[Drawdown] PnL: {total_pnl:.2f}, Threshold: {-threshold}")
-                    # Get current time in USA Central Time
+                    print(f"[Drawdown] PnL: {total_pnl:.2f}, Threshold: {-threshold:.2f}")
                     central_tz = pytz.timezone('America/Chicago')
                     now = datetime.now(central_tz)
                     current_time_str = now.strftime("%H:%M")
                     
                     if total_pnl <= -threshold and not self.max_drawdown_triggered:
-                        print(f"Max loss threshold of {-threshold} hit. Stopping all strategies.")
+                        print(f"Max loss threshold of ${-threshold:,.0f} hit. Stopping all strategies.")
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
                         
@@ -1710,18 +1862,18 @@ class StrategyManager:
 
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
-        # Get current time in USA Eastern Time
+        
         eastern_tz = pytz.timezone(self.config.TRADING_HOURS.timezone)
         current_time = datetime.now(eastern_tz)
         current_time_str = current_time.strftime("%H:%M")
         
-        # Get entry windows from configuration
+        
         morning_start = self.config.TRADING_HOURS.morning_entry_start
         morning_end = self.config.TRADING_HOURS.morning_entry_end
         afternoon_start = self.config.TRADING_HOURS.afternoon_entry_start
         afternoon_end = self.config.TRADING_HOURS.afternoon_entry_end
         
-        # Convert time strings to datetime objects for proper comparison
+        
         def time_str_to_datetime(time_str):
             return datetime.strptime(time_str, "%H:%M").time()
         
@@ -1731,7 +1883,7 @@ class StrategyManager:
         afternoon_start_obj = time_str_to_datetime(afternoon_start)
         afternoon_end_obj = time_str_to_datetime(afternoon_end)
         
-        # Check if current time is in either window
+        
         in_morning_window = morning_start_obj <= current_time_obj <= morning_end_obj
         in_afternoon_window = afternoon_start_obj <= current_time_obj <= afternoon_end_obj
         
@@ -1741,7 +1893,7 @@ class StrategyManager:
         self.threads = []
         self.strategies = []
         
-        # Wait for entry time window before running stock selection
+        
         print("Waiting for entry time window to begin stock selection...")
         while not self.is_entry_time_window() and not self.config.TESTING:
             eastern_tz = pytz.timezone(self.config.TRADING_HOURS.timezone)
@@ -1752,7 +1904,6 @@ class StrategyManager:
         
         print("Entry time window detected! Starting stock selection...")
         
-        # Only run stock selection when in entry time window
         try:
             self.stocks_list, self.stocks_dict = self.selector.run()
             # self.stocks_list = ["AAPL"]
@@ -1760,7 +1911,6 @@ class StrategyManager:
             print(f"Stock selector returned {len(self.stocks_list)} stocks")
         except Exception as e:
             print(f"Error in stock selector: {e}")
-            # Fallback to a default list
             self.stocks_list = ["AAPL"]
             self.stocks_dict = []
 
@@ -1780,14 +1930,12 @@ class StrategyManager:
             t.start()
             self.threads.append(t)
         
-        # Wait for all threads to complete
         print(f"\nWaiting for {len(self.threads)} strategies to complete...")
         for i, thread in enumerate(self.threads):
             thread.join()
             print(f"Strategy {i+1} completed")
         
-        # Print final qualifying stocks summary
-
+        
     def test(self):
         vix_df = self.broker.get_current_price("NTNX")
         print(vix_df)
@@ -1805,7 +1953,7 @@ class StrategyManager:
         print(f"\n=== QUALIFYING STOCKS ({len(self.qualifying_stocks)}) ===")
         for i, stock_data in enumerate(self.qualifying_stocks, 1):
             symbol = stock_data['symbol']
-            # Try to get more info from stocks_dict if available
+            
             stock_info = next((item for item in self.stocks_dict if item.get('symbol') == symbol), {})
             print(f"{i}. {symbol}")
             print(f"   Alpha Score: {stock_data.get('alpha_score', 0):.1f}")
@@ -1820,11 +1968,9 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
-    # Backup existing database before starting
     print("Checking for existing database to backup...")
     trades_db.backup_database()
     
-    # fetch_marketcap_csv()
     manager = StrategyManager()
     manager.run()
     print("STOPPING MANAGER")

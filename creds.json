@@ -128,7 +128,9 @@
         "max_daily_trades": 10,
         "daily_drawdown_limit": 0.02,
         "monthly_drawdown_limit": 0.08,
-        "drawdown_alert": 0.015
+        "drawdown_alert": 0.015,
+        "lower_limit": 0.02,
+        "upper_limit": 0.03
     },
     "STOP_LOSS_CONFIG": {
         "default_stop_loss": 0.015,
