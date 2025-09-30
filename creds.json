@@ -170,7 +170,11 @@
     },
     "HEDGE_CONFIG": {
         "enabled": false,
-        "hedge_symbol": "XLF",
+        "hedge_symbol": "SQQQ",
+        "hedge_options": [
+            "SQQQ",
+            "SPXU"
+        ],
         "triggers": {
             "vix_threshold": 22,
             "sp500_drop_threshold": 0.012
@@ -221,7 +225,7 @@
         "market_open": "09:30",
         "market_close": "16:00",
         "timezone": "US/Eastern",
-        "morning_entry_start": "9:00",
+        "morning_entry_start": "09:00",
         "morning_entry_end": "11:15",
         "afternoon_entry_start": "13:30",
         "afternoon_entry_end": "14:30",

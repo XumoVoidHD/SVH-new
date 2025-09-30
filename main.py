@@ -255,7 +255,7 @@ class Strategy:
         return leverage
     
     def execute_hedge(self, hedge_level, beta):
-        """Execute hedge by shorting XLF ETF"""
+        """Execute hedge by buying SQQQ ETF"""
         if hedge_level is None or self.hedge_active:
             return
         
@@ -264,16 +264,16 @@ class Strategy:
             account_equity = creds.EQUITY
             hedge_amount = account_equity * beta
             
-            # Get XLF price
-            xlf_price = self.broker.get_current_price(self.hedge_symbol)
-            if xlf_price is None:
+            # Get hedge symbol price
+            hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            if hedge_price is None:
                 print(f"Unable to get {self.hedge_symbol} price for hedge")
                 return
             
             # Calculate shares to buy
-            hedge_shares = int(hedge_amount / xlf_price)
+            hedge_shares = int(hedge_amount / hedge_price)
 
-            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=xlf_price, side="BUY")
+            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=hedge_shares, order_type="MARKET", price=hedge_price, side="BUY")
             if trade is None:
                 print(f"Unable to place hedge order for {self.hedge_symbol}")
                 return
@@ -443,25 +443,25 @@ class Strategy:
             traceback.print_exc()
     
     def close_hedge(self):
-        """Close hedge position by buying back XLF shares"""
+        """Close hedge position by selling hedge shares"""
         if not self.hedge_active or self.hedge_shares == 0:
             return
         
         try:
             print(f"Closing hedge: Selling {self.hedge_shares} shares of {self.hedge_symbol}")
             
-            # Get current XLF price for P&L calculation
-            current_xlf_price = self.broker.get_current_price(self.hedge_symbol)
-            if current_xlf_price is None:
+            # Get current hedge symbol price for P&L calculation
+            current_hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            if current_hedge_price is None:
                 print(f"Unable to get current {self.hedge_symbol} price for P&L calculation")
-                current_xlf_price = 0
+                current_hedge_price = 0
             
             # Calculate hedge P&L (profit from long position)
             hedge_pnl = 0
             if hasattr(self, 'hedge_entry_price') and self.hedge_entry_price:
-                hedge_pnl = (current_xlf_price - self.hedge_entry_price) * self.hedge_shares
+                hedge_pnl = (current_hedge_price - self.hedge_entry_price) * self.hedge_shares
             
-            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=self.hedge_shares, order_type="MARKET", price=current_xlf_price, side="SELL")
+            trade = self.broker.place_order(symbol=self.hedge_symbol, qty=self.hedge_shares, order_type="MARKET", price=current_hedge_price, side="SELL")
             if trade is None:
                 print(f"Unable to place hedge order for {self.hedge_symbol}")
                 return
@@ -1652,7 +1652,7 @@ class StrategyManager:
         # Create stop event BEFORE starting the thread
         self.stop_event = threading.Event()
         
-        # Add XLF to database for hedging - all threads can use it
+        # Add hedge symbol to database for hedging - all threads can use it
         hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
         print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
         trades_db.add_stocks_from_list([hedge_symbol])

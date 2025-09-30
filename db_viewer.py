@@ -1982,9 +1982,15 @@ def main():
                     value=hedge_config.get('enabled', True), 
                     key="hedge_enabled"
                 )
-                hedge_symbol = st.text_input(
+                hedge_options = hedge_config.get('hedge_options', ['SQQQ', 'SPXU'])
+                current_hedge = hedge_config.get('hedge_symbol', 'SQQQ')
+                if current_hedge not in hedge_options:
+                    hedge_options.insert(0, current_hedge)
+                
+                hedge_symbol = st.selectbox(
                     "Hedge Symbol:", 
-                    value=hedge_config.get('hedge_symbol', 'XLF'), 
+                    options=hedge_options,
+                    index=hedge_options.index(current_hedge),
                     key="hedge_symbol"
                 )
                 vix_threshold = st.number_input(
@@ -2390,6 +2396,7 @@ def main():
                 "HEDGE_CONFIG": {
                     "enabled": hedge_enabled,
                     "hedge_symbol": hedge_symbol,
+                    "hedge_options": hedge_options,
                     "triggers": {"vix_threshold": vix_threshold, "sp500_drop_threshold": sp500_drop_threshold},
                     "exit_conditions": {
                         "vix_exit_threshold": vix_exit_threshold,
