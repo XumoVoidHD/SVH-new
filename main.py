@@ -1,6 +1,6 @@
 from simulation import ibkr_broker
 import pandas as pd
-from stock_selector import StockSelector
+from stock_selector import StockSelector, initialize_stock_selector
 import random
 import threading
 import time
@@ -1968,6 +1968,10 @@ class StrategyManager:
             print()
             
 if __name__ == "__main__":
+    print("Caching ADV and RVOL data...")
+    initialize_stock_selector()
+    print("ADV and RVOL data cached")
+
     print("Checking for existing database to backup...")
     trades_db.backup_database()
     

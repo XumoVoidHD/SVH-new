@@ -67,7 +67,7 @@ class TradesDatabase:
             conn.close()
     
     def backup_database(self):
-        """Backup the current database to historical_data folder with date-based naming"""
+        """Backup the current database to historical_data folder with date-based naming using creation date"""
         if not os.path.exists(self.db_path):
             return False
             
@@ -76,16 +76,17 @@ class TradesDatabase:
         if not os.path.exists(historical_dir):
             os.makedirs(historical_dir)
         
-        # Get current date
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        # Get database creation date
+        db_creation_time = os.path.getctime(self.db_path)
+        creation_date = datetime.fromtimestamp(db_creation_time).strftime("%Y-%m-%d")
         
-        # Create backup filename
-        backup_filename = f"trades_{current_date}.db"
+        # Create backup filename using creation date
+        backup_filename = f"trades_{creation_date}.db"
         backup_path = os.path.join(historical_dir, backup_filename)
         
-        # If backup already exists for today, add timestamp
+        # If backup already exists for this creation date, add timestamp
         if os.path.exists(backup_path):
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = datetime.fromtimestamp(db_creation_time).strftime("%Y-%m-%d_%H-%M-%S")
             backup_filename = f"trades_{timestamp}.db"
             backup_path = os.path.join(historical_dir, backup_filename)
         
@@ -93,6 +94,11 @@ class TradesDatabase:
             # Copy the database file
             shutil.copy2(self.db_path, backup_path)
             print(f"Database backed up to: {backup_path}")
+            
+            # Delete the original trades.db file after successful backup
+            os.remove(self.db_path)
+            print(f"Original database file {self.db_path} deleted after successful backup")
+            
             return True
         except Exception as e:
             print(f"Error backing up database: {e}")

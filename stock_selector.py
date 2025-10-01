@@ -62,8 +62,6 @@ class StockSelector:
         self.adv_data_cache = {}
 
     def load_and_filter_market_cap(self):
-        # Delete existing cache files if they exist
-
         
         df = pd.read_csv(self.csv_path)
         df["marketcap"] = pd.to_numeric(df["marketcap"], errors="coerce")
@@ -541,8 +539,9 @@ class StockSelector:
         return top_df["symbol"].tolist(), top_df.to_dict(orient="records")  # Final result as list of dicts
 
 
-if __name__ == "__main__":
+def initialize_stock_selector():
     fetch_marketcap_csv()
+    print("Deleted existing cache files")
     cache_files = ['adv_cache.pkl', 'rvol_cache.pkl']
     for cache_file in cache_files:
         if os.path.exists(cache_file):
@@ -553,6 +552,10 @@ if __name__ == "__main__":
                 print(f"Warning: Could not delete cache file {cache_file}: {e}")
     selector = StockSelector()
     start_time = time.time()
-    top_sector_stocks = selector.load_and_filter_market_cap()
+    selector.load_and_filter_market_cap()
     end_time = time.time()
     print(f"Time taken {end_time-start_time}")
+
+if __name__ == "__main__":
+    initialize_stock_selector()
+

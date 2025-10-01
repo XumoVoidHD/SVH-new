@@ -213,28 +213,6 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
             
-            with col5:
-                if st.button("Initialize Bot", type="secondary", help="Initialize database with market cap data", key="init_db_raw"):
-                    try:
-                        # Get the current directory
-                        current_dir = os.getcwd()
-                        stock_selector_path = os.path.join(current_dir, "stock_selector.py")
-                        
-                        if os.path.exists(stock_selector_path):
-                            # Run stock_selector.py in a new terminal window/process
-                            if os.name == 'nt':  # Windows
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', stock_selector_path], 
-                                            shell=True, cwd=current_dir)
-                            else:  # Linux/Mac
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', stock_selector_path], 
-                                            cwd=current_dir)
-                            
-                            st.success("✅ Database initialization started in new terminal!")
-                        else:
-                            st.error("❌ stock_selector.py not found!")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
             
             # Connect to database
             conn = get_db_connection()
@@ -483,29 +461,6 @@ def main():
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
             
-            with col5:
-                if st.button("Initialize Bot", type="secondary", help="Initialize database with market cap data", key="init_db_simplified"):
-                    try:
-                        
-                        # Get the current directory
-                        current_dir = os.getcwd()
-                        stock_selector_path = os.path.join(current_dir, "stock_selector.py")
-                        
-                        if os.path.exists(stock_selector_path):
-                            # Run stock_selector.py in a new terminal window/process
-                            if os.name == 'nt':  # Windows
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', stock_selector_path], 
-                                            shell=True, cwd=current_dir)
-                            else:  # Linux/Mac
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', stock_selector_path], 
-                                            cwd=current_dir)
-                            
-                            st.success("Database initialization started in new terminal!")
-                        else:
-                            st.error("stock_selector.py not found!")
-                            
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
             
             # Connect to database for raw view
             conn = get_db_connection()
