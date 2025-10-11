@@ -21,9 +21,9 @@ class StreamToLogger:
         pass  # Required for compatibility
 
 def setup_logger(base_log_dir="logs"):
-    # Get current date and time in Central Standard Time
-    central_tz = pytz.timezone('America/Chicago')
-    now = datetime.now(central_tz)
+    # Get current date and time in Eastern Time
+    eastern_tz = pytz.timezone('US/Eastern')
+    now = datetime.now(eastern_tz)
     current_date = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -39,18 +39,18 @@ def setup_logger(base_log_dir="logs"):
     logger.setLevel(logging.INFO)
     logger.handlers = []  # Clear existing handlers
 
-    # Custom formatter that uses CST timezone
-    class CSTFormatter(logging.Formatter):
+    # Custom formatter that uses Eastern timezone
+    class EasternFormatter(logging.Formatter):
         def formatTime(self, record, datefmt=None):
-            # Convert record time to CST
+            # Convert record time to Eastern
             dt = datetime.fromtimestamp(record.created, tz=pytz.UTC)
-            dt_cst = dt.astimezone(pytz.timezone('America/Chicago'))
+            dt_eastern = dt.astimezone(pytz.timezone('US/Eastern'))
             if datefmt:
-                return dt_cst.strftime(datefmt)
+                return dt_eastern.strftime(datefmt)
             else:
-                return dt_cst.strftime('%Y-%m-%d %H:%M:%S')
+                return dt_eastern.strftime('%Y-%m-%d %H:%M:%S')
     
-    formatter = CSTFormatter('%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s')
+    formatter = EasternFormatter('%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s')
 
 
     # File handler

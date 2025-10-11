@@ -85,6 +85,86 @@ class Strategy:
         
         # Capital tracking
         self.used_capital = 0
+
+    def _safe_broker_call(self, broker_method, *args, max_retries=5, base_delay=2.0, max_delay=300.0, **kwargs):
+        """
+        Safely call broker methods with exponential backoff and random jitter
+        
+        Args:
+            broker_method: The broker method to call
+            *args: Arguments for the broker method
+            max_retries (int): Maximum number of retry attempts
+            base_delay (float): Base delay in seconds (starts at 2 seconds)
+            max_delay (float): Maximum delay in seconds (5 minutes = 300 seconds)
+            **kwargs: Keyword arguments for the broker method
+        
+        Returns:
+            Result from broker method or None if all retries failed
+        """
+        last_exception = None
+        
+        for attempt in range(max_retries):
+            try:
+                result = broker_method(*args, **kwargs)
+                if result is not None:
+                    return result
+                else:
+                    print(f"Broker call returned None, retrying... (attempt {attempt + 1}/{max_retries})")
+                    
+            except Exception as e:
+                last_exception = e
+                print(f"Broker call failed: {e} (attempt {attempt + 1}/{max_retries})")
+            
+            # Don't sleep after the last attempt
+            if attempt < max_retries - 1:
+                # Exponential backoff: 2, 4, 8, 16, 32 seconds...
+                exponential_delay = base_delay * (2 ** attempt)
+                
+                # Random jitter increases with retry attempts
+                # Early retries: small random variation
+                # Later retries: larger random variation up to 5 minutes
+                if attempt == 0:
+                    # First retry: 2 seconds ± 0.5 seconds
+                    min_random = exponential_delay - 0.5
+                    max_random = exponential_delay + 0.5
+                elif attempt == 1:
+                    # Second retry: 4 seconds ± 1 second
+                    min_random = exponential_delay - 1.0
+                    max_random = exponential_delay + 1.0
+                elif attempt == 2:
+                    # Third retry: 8 seconds ± 2 seconds
+                    min_random = exponential_delay - 2.0
+                    max_random = exponential_delay + 2.0
+                else:
+                    # Later retries: larger randomization, capped at 5 minutes
+                    randomization_factor = min(attempt * 0.5, 2.0)  # Increase randomization up to 2x
+                    min_random = exponential_delay * (1 - randomization_factor)
+                    max_random = min(exponential_delay * (1 + randomization_factor), max_delay)
+                
+                # Ensure minimum delay of 2 seconds
+                min_random = max(min_random, 2.0)
+                
+                # Generate random delay within the range
+                delay = random.uniform(min_random, max_random)
+                
+                print(f"Retrying broker call in {delay:.2f} seconds... (exponential: {exponential_delay:.2f}s, range: {min_random:.2f}-{max_random:.2f}s)")
+                time.sleep(delay)
+        
+        # If all retries failed, log and return None
+        if last_exception:
+            print(f"All {max_retries} attempts failed. Last error: {last_exception}")
+        else:
+            print(f"All {max_retries} attempts returned None")
+        
+        return None
+
+    def get_current_price_with_retry(self, symbol):
+        """Get current price with exponential backoff retry logic"""
+        return self._safe_broker_call(self.broker.get_current_price, symbol)
+
+    def get_historical_data_with_retry(self, stock, duration="3 D", bar_size="3 mins"):
+        """Get historical data with exponential backoff retry logic"""
+        return self._safe_broker_call(self.broker.get_historical_data, stock=stock, duration=duration, bar_size=bar_size)
     
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
@@ -155,7 +235,7 @@ class Strategy:
         
         try:
             # Check VIX trigger
-            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size=3)
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 if current_vix > self.hedge_config.triggers.vix_threshold:
@@ -165,7 +245,7 @@ class Strategy:
                 print(f"VIX data unavailable or empty for hedge trigger check")
             
             # Check S&P 500 drop trigger (using SPY as proxy)
-            spy_data = self.broker.get_historical_data(stock="SPY", bar_size=15)  # 15-min data
+            spy_data = self.get_historical_data_with_retry(stock="SPY", bar_size=15)  # 15-min data
             if not spy_data.empty and len(spy_data) >= 2 and 'close' in spy_data.columns:
                 current_price = spy_data['close'].iloc[-1]
                 price_15min_ago = spy_data['close'].iloc[-2]
@@ -203,7 +283,7 @@ class Strategy:
     def calculate_sharpe_ratio(self, days=30):
         try:
             # Get historical price data for this stock
-            historical_data = self.broker.get_historical_data(
+            historical_data = self.get_historical_data_with_retry(
                 stock=self.stock, 
                 bar_size="1 day", 
                 duration=f"{days + 5} D"  # Get a few extra days to ensure we have enough
@@ -256,7 +336,7 @@ class Strategy:
     def calculate_10day_drawdown(self):
         try:
             # Get historical price data for this stock
-            historical_data = self.broker.get_historical_data(
+            historical_data = self.get_historical_data_with_retry(
                 stock=self.stock, 
                 bar_size="1 day", 
                 duration="15 D"  # Get 15 days to ensure we have at least 10
@@ -309,7 +389,7 @@ class Strategy:
                 condition_details.append(f"Alpha {self.score} < 85")
             
             # 2. Check VIX < 18 and falling
-            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size="1 day", duration="30 D")
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size="1 day", duration="30 D")
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 
@@ -378,7 +458,7 @@ class Strategy:
             hedge_amount = account_equity * beta
             
             # Get hedge symbol price
-            hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
             if hedge_price is None:
                 print(f"Unable to get {self.hedge_symbol} price for hedge")
                 return
@@ -409,7 +489,7 @@ class Strategy:
                 hedge_level=hedge_level,
                 hedge_beta=beta,
                 hedge_entry_price=trade[1],
-                hedge_entry_time=datetime.now(pytz.timezone('America/Chicago'))
+                hedge_entry_time=datetime.now(pytz.timezone('US/Eastern'))
             )
             
             print(f"Hedge executed: Buy {hedge_shares} shares of {self.hedge_symbol}")
@@ -429,7 +509,7 @@ class Strategy:
         
         try:
             # Check VIX < 20 and falling (10-min slope negative)
-            vix_data = self.broker.get_historical_data(stock="VIXY", bar_size=3)
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
             if not vix_data.empty and len(vix_data) >= 4 and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 vix_slope_period = self.hedge_config.exit_conditions.vix_slope_period
@@ -441,7 +521,7 @@ class Strategy:
                     signal_details.append(f"VIX {current_vix:.1f} < {vix_exit_threshold} and falling")
             
             # Check S&P 500 up > +0.6% in 15 min after hedge added
-            spy_data = self.broker.get_historical_data(stock="SPY", bar_size=15)
+            spy_data = self.get_historical_data_with_retry(stock="SPY", bar_size=15)
             if not spy_data.empty and len(spy_data) >= 2 and 'close' in spy_data.columns:
                 current_price = spy_data['close'].iloc[-1]
                 price_15min_ago = spy_data['close'].iloc[-2]
@@ -453,7 +533,7 @@ class Strategy:
                     signal_details.append(f"S&P up {gain_pct*100:.1f}% > {sp500_recovery_threshold*100:.1f}%")
             
             # Check Nasdaq (QQQ) trades above 5-min VWAP for 2+ consecutive bars
-            qqq_data = self.broker.get_historical_data(stock="QQQ", bar_size=5)
+            qqq_data = self.get_historical_data_with_retry(stock="QQQ", bar_size=5)
             if not qqq_data.empty and len(qqq_data) >= 2 and 'close' in qqq_data.columns:
                 # Calculate 5-min VWAP
                 qqq_vwap = vwap.calc_vwap(qqq_data)
@@ -518,7 +598,7 @@ class Strategy:
             new_hedge_amount = account_equity * new_beta
             
             # Get current hedge price
-            hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
             if hedge_price is None:
                 print(f"Unable to get {self.hedge_symbol} price for hedge scaling")
                 return
@@ -564,7 +644,7 @@ class Strategy:
             print(f"Closing hedge: Selling {self.hedge_shares} shares of {self.hedge_symbol}")
             
             # Get current hedge symbol price for P&L calculation
-            current_hedge_price = self.broker.get_current_price(self.hedge_symbol)
+            current_hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
             if current_hedge_price is None:
                 print(f"Unable to get current {self.hedge_symbol} price for P&L calculation")
                 current_hedge_price = 0
@@ -588,7 +668,7 @@ class Strategy:
                 hedge_active=False,
                 hedge_shares=0,
                 hedge_exit_price=current_hedge_price,
-                hedge_exit_time=datetime.now(pytz.timezone('America/Chicago')),
+                hedge_exit_time=datetime.now(pytz.timezone('US/Eastern')),
                 hedge_pnl=hedge_pnl
             )
             
@@ -666,7 +746,7 @@ class Strategy:
             
             for attempt in range(max_retries):
                 try:
-                    data = self.broker.get_historical_data(stock=self.stock, bar_size=period)
+                    data = self.get_historical_data_with_retry(stock=self.stock, bar_size=period)
                     
                     # Check if data is valid and not empty
                     if data is not None and hasattr(data, 'empty') and not data.empty and len(data) > 0:
@@ -835,7 +915,7 @@ class Strategy:
     def _check_market_calm_conditions(self):
         """Check market calm conditions (VIX)"""
         try:
-            vix_df = self.broker.get_historical_data(stock="VIXY", bar_size=3)
+            vix_df = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
             if vix_df.empty:
                 return False
             
@@ -905,7 +985,7 @@ class Strategy:
         self.current_leverage = leverage_multiplier
         
         account_equity = creds.EQUITY
-        current_price = self.broker.get_current_price(self.stock)
+        current_price = self.get_current_price_with_retry(self.stock)
         
         # Base risk per trade
         base_risk_per_trade = creds.RISK_CONFIG.risk_per_trade
@@ -945,7 +1025,7 @@ class Strategy:
             self.margin_used_leverage = 0
             print(f"  - No leverage applied")
         
-        data_3min = self.broker.get_historical_data(stock=self.stock, bar_size=3)
+        data_3min = self.get_historical_data_with_retry(stock=self.stock, bar_size=3)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
         
         if vwap_value < current_price:
@@ -972,7 +1052,7 @@ class Strategy:
     
     def calculate_stop_loss(self, current_price):
         """Calculate stop loss percentage based on volatility"""
-        data_3min = self.broker.get_historical_data(stock=self.stock, bar_size=3)
+        data_3min = self.get_historical_data_with_retry(stock=self.stock, bar_size=3)
         atr14 = atr.calc_atr(data_3min, creds.STOP_LOSS_CONFIG.atr_period)
         atr14 = atr14.iloc[-1]
 
@@ -1037,8 +1117,8 @@ class Strategy:
                     self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
                     print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
 
-                    central_tz = pytz.timezone('America/Chicago')
-                    self.entry_time = datetime.now(central_tz)
+                    eastern_tz = pytz.timezone('US/Eastern')
+                    self.entry_time = datetime.now(eastern_tz)
                     self.current_price = trade[1]
                     # self.unrealized_pnl = 0.0
                     # self.realized_pnl = 0.0
@@ -1072,8 +1152,8 @@ class Strategy:
     def run(self, i):
         while True:
             # Check for end-of-day exit times
-            central_tz = pytz.timezone(self.trading_hours.timezone)
-            current_time = datetime.now(central_tz).time()
+            eastern_tz = pytz.timezone(self.trading_hours.timezone)
+            current_time = datetime.now(eastern_tz).time()
 
             # Get exit times from configuration
             weak_exit_time = self.time_str_to_datetime(self.trading_hours.weak_exit_time)
@@ -1121,7 +1201,7 @@ class Strategy:
     
     def monitor_position(self):
         try:
-            self.current_price = self.broker.get_current_price(self.stock)
+            self.current_price = self.get_current_price_with_retry(self.stock)
             
             if self.current_price is None:
                 print(f"Unable to get current price for {self.stock} in position monitoring")
@@ -1181,8 +1261,8 @@ class Strategy:
         if current_gain_pct >= gain_threshold:
             if not self.trailing_exit_monitoring:
                 self.trailing_exit_monitoring = True
-                central_tz = pytz.timezone('America/Chicago')
-                self.trailing_exit_start_time = datetime.now(central_tz)
+                eastern_tz = pytz.timezone('US/Eastern')
+                self.trailing_exit_start_time = datetime.now(eastern_tz)
                 self.trailing_exit_start_price = self.current_price
                 print(f"Starting trailing exit monitoring at {gain_threshold*100:.1f}% gain")
                 print(f"Monitoring for {drop_threshold*100:.1f}% price drop for {monitor_period} minutes, checking every second")
@@ -1196,14 +1276,14 @@ class Strategy:
                 
                 # Start active monitoring for the specified period
                 monitor_period_seconds = monitor_period * 60  # Convert minutes to seconds
-                start_monitoring_time = datetime.now(central_tz)
+                start_monitoring_time = datetime.now(eastern_tz)
                 
                 print(f"Starting active monitoring for {monitor_period_seconds} seconds...")
                 
                 while True:
                     try:
                         # Check if monitoring period has expired
-                        current_time = datetime.now(central_tz)
+                        current_time = datetime.now(eastern_tz)
                         elapsed_seconds = (current_time - start_monitoring_time).total_seconds()
                         
                         if elapsed_seconds >= monitor_period_seconds:
@@ -1217,7 +1297,7 @@ class Strategy:
                             break
                         
                         # Get current price
-                        self.current_price = self.broker.get_current_price(self.stock)
+                        self.current_price = self.get_current_price_with_retry(self.stock)
                         if self.current_price is None:
                             print(f"Unable to get current price for {self.stock}, retrying...")
                             time.sleep(1)
@@ -1255,7 +1335,7 @@ class Strategy:
 
     
     def close_position(self, reason, shares_to_sell=None):
-        current_price = self.broker.get_current_price(self.stock)
+        current_price = self.get_current_price_with_retry(self.stock)
         
         if shares_to_sell is None:
             shares_to_sell = self.position_shares
@@ -1301,9 +1381,9 @@ class Strategy:
             if hasattr(self, 'trailing_stop_levels_remaining'):
                 delattr(self, 'trailing_stop_levels_remaining')
             
-            # Get current time in USA Central Time
-            central_tz = pytz.timezone('America/Chicago')
-            self.close_time = datetime.now(central_tz)
+            # Get current time in USA Eastern Time
+            eastern_tz = pytz.timezone('US/Eastern')
+            self.close_time = datetime.now(eastern_tz)
             
             with self.manager.manager_lock:
                 self.manager.realized_pnl += realized_pnl
@@ -1425,8 +1505,8 @@ class Strategy:
         if current_gain_pct >= exit_config.gain_threshold:
             # Check if we should exit based on price drop
             # Get current time in USA Central Time
-            central_tz = pytz.timezone('America/Chicago')
-            self.trailing_start_time = datetime.now(central_tz)
+            eastern_tz = pytz.timezone('US/Eastern')
+            self.trailing_start_time = datetime.now(eastern_tz)
             self.max_price_since_trailing = current_price
             print(f"TRAILING EXIT MONITORING: {self.stock} - Started monitoring for exit conditions")
             
@@ -1434,9 +1514,8 @@ class Strategy:
             self.max_price_since_trailing = max(self.max_price_since_trailing, current_price)
             
             # Check time and price drop
-            # Get current time in USA Central Time for calculation
-            central_tz = pytz.timezone('America/Chicago')
-            time_since_trailing = datetime.now(central_tz) - self.trailing_start_time
+            # Get current time in USA Eastern Time for calculation
+            time_since_trailing = datetime.now(eastern_tz) - self.trailing_start_time
             if time_since_trailing.total_seconds() <= exit_config.monitor_period * 60:
                 price_drop = (self.max_price_since_trailing - current_price) / self.max_price_since_trailing
                 if price_drop >= exit_config.drop_threshold:
@@ -1453,8 +1532,8 @@ class Strategy:
                 # Monitor position
                 self.monitor_position()
 
-                central_tz = pytz.timezone(self.trading_hours.timezone)
-                current_time = datetime.now(central_tz).time()
+                eastern_tz = pytz.timezone(self.trading_hours.timezone)
+                current_time = datetime.now(eastern_tz).time()
 
                 # Get exit times from configuration
                 weak_exit_time = self.time_str_to_datetime(self.trading_hours.weak_exit_time)
@@ -1501,7 +1580,7 @@ class Strategy:
             'pnl': self.unrealized_pnl,  # For backward compatibility
             'pnl_pct': ((self.current_price - self.entry_price) / self.entry_price * 100) if self.entry_price > 0 else 0,
             'entry_time': self.entry_time,
-            'duration': (datetime.now(pytz.timezone('America/Chicago')) - self.entry_time) if self.entry_time else None
+            'duration': (datetime.now(pytz.timezone('US/Eastern')) - self.entry_time) if self.entry_time else None
         }
     
     def print_position_summary(self):
@@ -1664,85 +1743,36 @@ class StrategyBroker:
             raise ValueError(f"Unsupported order type: {order_type}")
 
     def get_total_pnl(self):
-        return 0
-
-class StrategyBrokerOld:
-
-    def __init__(self):
-        self.client = ibkr_broker.IBTWSAPI(client_id=13)
-        self.client.connect()
-    
-    def is_connected(self):
-        return self.client.is_connected()
-
-    def get_current_price(self, stock: str):
-        return self.client.get_stock_price(stock)
-
-
-    def get_historical_data(self, stock: str, bar_size: str = '3', num: str = '1 D', 
-                           exchange: str = 'SMART', max_retries: int = 3, retry_delay: float = 2.0):
-        # Valid bar sizes according to IBKR API
-        valid_bar_sizes = {
-            '1 secs', '5 secs', '10 secs', '15 secs', '30 secs',
-            '1 min', '2 mins', '3 mins', '5 mins', '10 mins', '15 mins', '20 mins', '30 mins',
-            '1 hour', '2 hours', '3 hours', '4 hours', '8 hours',
-            '1 day', '1W', '1M'
-        }
-        
-        for attempt in range(max_retries + 1):  # +1 because we want to try max_retries times after the first attempt
-            try:
-                print(f"Attempting to fetch historical data for {stock} (attempt {attempt + 1}/{max_retries + 1})")
-                # Convert bar_size to proper IBKR format
-                if isinstance(bar_size, (int, str)) and str(bar_size).isdigit():
-                    bar_size = f"{bar_size} mins"
-                elif isinstance(bar_size, str) and bar_size.endswith(' min'):
-                    bar_size = bar_size.replace(' min', ' mins')
-                
-                # Validate bar size
-                if bar_size not in valid_bar_sizes:
-                    print(f"Warning: Invalid bar size '{bar_size}'. Using '5 mins' as fallback.")
-                    bar_size = '5 mins'
-                
-                data = self.client.get_historical_data(stock, num, bar_size, exchange)
-                
-                # Check if we got valid data
-                if data is not None and not data.empty and len(data) > 0:
-                    print(f"Successfully fetched {len(data)} bars of historical data for {stock}")
-                    return data
-                else:
-                    print(f"Attempt {attempt + 1}: No data returned for {stock}")
-                    
-            except Exception as e:
-                print(f"Attempt {attempt + 1}: Error fetching historical data for {stock}: {str(e)}")
+        """Get total combined PnL from stock positions (realized + unrealized)"""
+        try:
+            # Use trades_db's lock instead of self.lock since this is in StrategyBroker
+            conn = trades_db._get_connection()
+            cursor = conn.cursor()
             
-            # If this wasn't the last attempt, wait before retrying
-            if attempt < max_retries:
-                print(f"Waiting {retry_delay} seconds before retry...")
-                time.sleep(retry_delay)
-        
-        # If we get here, all retries failed
-        print(f"ERROR: Failed to fetch historical data for {stock} after {max_retries + 1} attempts")
-        return pd.DataFrame()
-
-    def place_order(self, symbol: str, qty: int, order_type: str = 'MARKET', 
-               price: float = None, side: str = 'BUY', max_retries: int = 3, retry_delay: float = 2.0):
-
-        trade = self.client.place_order(symbol=symbol, quantity=qty, order_type=order_type, price = price, side=side)
-        if trade["status"] == "Filled":
-            return trade
-        else:
-            return None
-
-    def get_total_pnl(self):
-        return 0
-
+            # Query to get total combined PnL from stock positions only
+            query = '''
+                SELECT 
+                    SUM(COALESCE(realized_pnl, 0) + COALESCE(unrealized_pnl, 0)) as total_pnl
+                FROM stock_strategies
+            '''
+            
+            cursor.execute(query)
+            result = cursor.fetchone()
+            
+            conn.close()
+            
+            return result[0] if result and result[0] is not None else 0
+                    
+        except Exception as e:
+            print(f"Error getting total PnL from database: {e}")
+            return 0
 
 class StrategyManager:
     
     def __init__(self):
         self.broker = StrategyBroker("127.0.0.1", 7497, client_id=1)
         self.config = creds
-        self.selector = StockSelector()
+        self.selector = StockSelector(client_id=15)  # Use different client ID to avoid conflicts
         self.manager_lock = threading.Lock()
         self.available_capital = creds.EQUITY
         self.used_capital = 0
@@ -1752,6 +1782,14 @@ class StrategyManager:
         self.stop_event = threading.Event()
         hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
         print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
+        
+        # Verify database is properly initialized before adding data
+        if not trades_db.verify_database():
+            print("Database verification failed, reinitializing...")
+            trades_db.init_database()
+            if not trades_db.verify_database():
+                raise Exception("Failed to initialize database properly")
+        
         trades_db.add_stocks_from_list([hedge_symbol])
         
         trades_db.update_strategy_data(hedge_symbol,
@@ -1784,7 +1822,7 @@ class StrategyManager:
                 if strategy.position_active and strategy.position_shares > 0:
                     active_count += 1
                     try:
-                        data_3min = self.broker.get_historical_data(stock=strategy.stock, bar_size=3)
+                        data_3min = self.get_historical_data_with_retry(stock=strategy.stock, bar_size=3)
                         if data_3min is not None and not data_3min.empty:
                             atr14 = atr.calc_atr(data_3min, 14)
                             if atr14 is not None and not atr14.empty:
@@ -1841,8 +1879,8 @@ class StrategyManager:
                     threshold = self.calculate_dynamic_daily_limit()
 
                     print(f"[Drawdown] PnL: {total_pnl:.2f}, Threshold: {-threshold:.2f}")
-                    central_tz = pytz.timezone('America/Chicago')
-                    now = datetime.now(central_tz)
+                    eastern_tz = pytz.timezone('US/Eastern')
+                    now = datetime.now(eastern_tz)
                     current_time_str = now.strftime("%H:%M")
                     
                     if total_pnl <= -threshold and not self.max_drawdown_triggered:
@@ -1851,14 +1889,17 @@ class StrategyManager:
                         self.stop_event.set()
                         
                     if current_time_str >= self.config.TRADING_HOURS.market_close:
-                        print(f"Exit time reached at {current_time_str} CT")
+                        print(f"Exit time reached at {current_time_str} CT - Closing drawdown monitor thread")
                         self.max_drawdown_triggered = True
                         self.stop_event.set()
+                        break
                             
                     time.sleep(5)
                 except Exception as e:
                     print(f"Error in drawdown monitoring: {e}")
                     time.sleep(5)
+            
+            print("Drawdown monitor thread has been closed.")
 
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
@@ -1937,7 +1978,7 @@ class StrategyManager:
         
         
     def test(self):
-        vix_df = self.broker.get_current_price("NTNX")
+        vix_df = self.get_current_price_with_retry("NTNX")
         print(vix_df)
         strategy = Strategy(self, "NTNX", self.broker, self.config)
         print(strategy.calculate_position_size())

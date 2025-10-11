@@ -8,7 +8,7 @@ class SQLDB:
     def __init__(self, db_name='trading.db'):
         self.db_name = db_name
         self._local = threading.local()
-        self.ist = pytz.timezone('Asia/Kolkata')
+        self.eastern_tz = pytz.timezone('US/Eastern')
         
         # Initialize database schema in the main thread
         conn = self._get_connection()
@@ -116,16 +116,16 @@ class SQLDB:
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_symbol ON positions_book(symbol)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_session ON positions_book(session_id)')
 
-    def _get_current_ist_time(self):
-        """Get current time in IST."""
-        return datetime.now(self.ist)
+    def _get_current_eastern_time(self):
+        """Get current time in Eastern."""
+        return datetime.now(self.eastern_tz)
 
     def insert_order(self, order_id, symbol, qty, order_type, price, sl, tp, triggerprice, status, filled_qty, fill_price, fill_time):
         with SQLDB._global_lock:
             conn = self._get_connection()
             cursor = conn.cursor()
             if fill_time:
-                fill_time = fill_time.astimezone(self.ist)
+                fill_time = fill_time.astimezone(self.eastern_tz)
             cursor.execute('''
                 INSERT INTO order_book (order_id, symbol, qty, order_type, price, sl, tp, triggerprice, status, filled_qty, fill_price, fill_time)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -138,7 +138,7 @@ class SQLDB:
             conn = self._get_connection()
             cursor = conn.cursor()
             if timestamp:
-                timestamp = timestamp.astimezone(self.ist)
+                timestamp = timestamp.astimezone(self.eastern_tz)
             cursor.execute('''
                 INSERT INTO trade_book (order_id, symbol, qty, exec_price, commission, pnl, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -157,11 +157,11 @@ class SQLDB:
             conn = self._get_connection()
             cursor = conn.cursor()
             try:
-                # Convert timestamps to IST
+                # Convert timestamps to Eastern
                 if open_time:
-                    open_time = open_time.astimezone(self.ist)
+                    open_time = open_time.astimezone(self.eastern_tz)
                 if close_time:
-                    close_time = close_time.astimezone(self.ist)
+                    close_time = close_time.astimezone(self.eastern_tz)
                 
                 # Check if position exists and is OPEN
                 cursor.execute('SELECT id, status FROM positions_book WHERE symbol = ? AND session_id = ?', (symbol, session_id))

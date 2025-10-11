@@ -1,5 +1,5 @@
 {
-    "EQUITY": 100000,
+    "EQUITY": 2000000,
     "TESTING": true,
     "VWAP_SHOULD_BE_BELOW_PRICE": true,
     "STOCK_SELECTION": {

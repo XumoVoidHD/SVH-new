@@ -263,12 +263,15 @@ def main():
                 
                 # Add summary row for PnL if the table has unrealized_pnl column
                 if 'unrealized_pnl' in df.columns:
-                    # Filter for active positions only
+                    # Filter for active positions only for unrealized PnL calculation
                     active_df = df[df['position_active'] == True] if 'position_active' in df.columns else df
                     
-                    # Calculate totals for active positions only
-                    total_unrealized_pnl = active_df['unrealized_pnl'].sum()
-                    total_realized_pnl = active_df['realized_pnl'].sum() if 'realized_pnl' in active_df.columns else 0
+                    # Calculate unrealized PnL from raw database fields (active positions only)
+                    calculated_unrealized = (active_df['current_price'] - active_df['entry_price']) * active_df['position_shares']
+                    total_unrealized_pnl = calculated_unrealized.sum()
+                    
+                    # Calculate realized PnL from ALL positions (active + closed)
+                    total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
                     total_combined_pnl = total_unrealized_pnl + total_realized_pnl
                     active_positions = len(active_df)
                     
@@ -310,7 +313,7 @@ def main():
                     simplified_display = pd.DataFrame({
                         'Symbol': simplified_df['symbol'],
                         'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
-                        'Quantity': simplified_df['position_shares'],
+                        'Quantity': simplified_df['shares'],
                         'Entry Price': simplified_df['entry_price'],
                         'Current Price': simplified_df['current_price'],
                         'Unrealized PnL': simplified_df['unrealized_pnl'],
@@ -330,12 +333,17 @@ def main():
                     simplified_display['Avg Price'] = simplified_display['Entry Price']  # Same as entry price for simplicity
                     simplified_display['Last Price'] = simplified_display['Current Price']
                     
-                    # Calculate total PnL (unrealized + realized)
-                    total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
+                    # Calculate PnL from raw database fields (same as raw database view)
+                    calculated_unrealized_pnl = simplified_display['Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
+                    calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
+                    
+                    # Use calculated unrealized PnL + stored realized PnL
+                    total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
                     simplified_display['Open Gain/Loss ($)'] = total_pnl
                     
                     # Calculate percentage based on total PnL relative to cost basis
                     simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                    simplified_display['Open Gain/Loss (%)'] = simplified_display['Open Gain/Loss (%)'].fillna(0)
                     
                     # Select and reorder columns for display
                     display_columns = [
@@ -374,7 +382,7 @@ def main():
                 st.download_button(
                     label="Download Simplified Data as CSV",
                     data=csv,
-                    file_name=f"simplified_trades_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"simplified_trades_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
                 
@@ -564,7 +572,7 @@ def main():
                 st.download_button(
                     label="Download data as CSV",
                     data=csv,
-                    file_name=f"trades_db_{datetime.now(pytz.timezone('America/Chicago')).strftime('%Y%m%d_%H%M%S')}.csv",
+                    file_name=f"trades_db_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
                 
@@ -691,14 +699,10 @@ def main():
                     # Calculate percentage based on total PnL relative to cost basis
                     top_symbols_display['Open Gain/Loss (%)'] = (total_pnl / top_symbols_display['Cost Basis'] * 100).round(2)
                     
-                    # Add Avg Score column
-                    top_symbols_display['Avg Score'] = symbol_performance['score']
-                    
                     # Select and reorder columns for display
                     display_columns = [
                         'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
-                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)',
-                        'Avg Score'
+                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
                     ]
                     top_symbols_display = top_symbols_display[display_columns]
                     
@@ -721,7 +725,6 @@ def main():
                     formatted_top_symbols['Last Price'] = formatted_top_symbols['Last Price'].apply(format_currency)
                     formatted_top_symbols['Open Gain/Loss ($)'] = formatted_top_symbols['Open Gain/Loss ($)'].apply(format_currency)
                     formatted_top_symbols['Open Gain/Loss (%)'] = formatted_top_symbols['Open Gain/Loss (%)'].apply(format_percentage)
-                    formatted_top_symbols['Avg Score'] = formatted_top_symbols['Avg Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
                     
                     # Display the formatted table
                     st.dataframe(formatted_top_symbols.head(10), use_container_width=True)
@@ -820,13 +823,10 @@ def main():
                             # Calculate percentage based on total PnL relative to cost basis
                             simplified_display['Open Gain/Loss (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
                             
-                            # Add Score column
-                            simplified_display['Score'] = symbol_data['score']
-                            
                             # Select and reorder columns for display
                             display_columns = [
                                 'Date', 'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
-                                'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)', 'Score'
+                                'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
                             ]
                             simplified_display = simplified_display[display_columns]
                             
@@ -849,7 +849,6 @@ def main():
                             formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
                             formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
                             formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
-                            formatted_display['Score'] = formatted_display['Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
                             
                             # Display the formatted table
                             st.dataframe(formatted_display, use_container_width=True)
@@ -1020,7 +1019,6 @@ def main():
                                     # Create simplified display format (same as Top Performing Symbols)
                                     simplified_display = pd.DataFrame({
                                         'Symbol': simplified_df['symbol'],
-                                        'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
                                         'Quantity': simplified_df['shares'],
                                         'Entry Price': simplified_df['entry_price'],
                                         'Current Price': simplified_df['current_price'],
@@ -1051,14 +1049,10 @@ def main():
                                         axis=1
                                     ).round(2)
                                     
-                                    # Add Avg Score column
-                                    simplified_display['Avg Score'] = simplified_df['score']
-                                    
                                     # Select and reorder columns for display (same as Top Performing Symbols)
                                     display_columns = [
-                                        'Symbol', 'Active', 'Quantity', 'Cost Basis', 'Market Value', 
-                                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)',
-                                        'Avg Score'
+                                        'Symbol', 'Quantity', 'Cost Basis', 'Market Value', 
+                                        'Avg Price', 'Last Price', 'Open Gain/Loss ($)', 'Open Gain/Loss (%)'
                                     ]
                                     simplified_display = simplified_display[display_columns]
                                     
@@ -1081,7 +1075,6 @@ def main():
                                     formatted_display['Last Price'] = formatted_display['Last Price'].apply(format_currency)
                                     formatted_display['Open Gain/Loss ($)'] = formatted_display['Open Gain/Loss ($)'].apply(format_currency)
                                     formatted_display['Open Gain/Loss (%)'] = formatted_display['Open Gain/Loss (%)'].apply(format_percentage)
-                                    formatted_display['Avg Score'] = formatted_display['Avg Score'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "0.00")
                                     
                                     # Display the formatted table
                                     st.dataframe(formatted_display, use_container_width=True)

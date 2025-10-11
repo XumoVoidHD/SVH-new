@@ -4,70 +4,158 @@ from datetime import datetime, timedelta
 import json
 import os
 import shutil
+import time
+import random
 
 class TradesDatabase:
     def __init__(self, db_path='trades.db'):
-        self.db_path = db_path
+        # Ensure we use absolute path to avoid issues with working directory changes
+        self.db_path = os.path.abspath(db_path)
         self.lock = threading.Lock()
+        print(f"TradesDatabase initializing with path: {self.db_path}")
         self.init_database()
+    
+    def _get_connection(self, timeout=30.0):
+        """Get a database connection with proper configuration and error handling"""
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                # Check if database file exists and is writable
+                if os.path.exists(self.db_path):
+                    if not os.access(self.db_path, os.W_OK):
+                        raise PermissionError(f"Database file {self.db_path} is not writable")
+                    print(f"Database file exists and is writable: {self.db_path}")
+                else:
+                    print(f"Database file does not exist, will be created: {self.db_path}")
+                
+                conn = sqlite3.connect(self.db_path, timeout=timeout, check_same_thread=False)
+                conn.execute('PRAGMA journal_mode=WAL')
+                conn.execute('PRAGMA synchronous=NORMAL')
+                conn.execute('PRAGMA foreign_keys=ON')
+                print(f"Database connection established successfully")
+                return conn
+                
+            except sqlite3.OperationalError as e:
+                if "readonly" in str(e).lower() or "locked" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                        print(f"Database locked/readonly, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        raise Exception(f"Database remains locked after {max_retries} attempts: {e}")
+                else:
+                    raise e
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    print(f"Database connection failed, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise e
+        
+        raise Exception(f"Failed to connect to database after {max_retries} attempts")
     
     def init_database(self):
         """Initialize the database with a single table for all stock data"""
-        with self.lock:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Create a single table for all stock strategy data
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS stock_strategies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT UNIQUE NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    score REAL DEFAULT 0,
-                    additional_checks_passed BOOLEAN DEFAULT FALSE,
-                    position_active BOOLEAN DEFAULT FALSE,
-                    position_shares INTEGER DEFAULT 0,
-                    shares INTEGER DEFAULT 0,
-                    current_price REAL DEFAULT 0,
-                    entry_price REAL DEFAULT 0,
-                    stop_loss_price REAL DEFAULT 0,
-                    take_profit_price REAL DEFAULT 0,
-                    used_capital REAL DEFAULT 0,
-                    unrealized_pnl REAL DEFAULT 0,
-                    realized_pnl REAL DEFAULT 0,
-                    entry_time TIMESTAMP,
-                    close_time TIMESTAMP,
-                    profit_booking_levels TEXT,
-                    trailing_exit_conditions TEXT,
-                    trailing_stop_levels TEXT,
-                    profit_booked_flags TEXT,
-                    trailing_stop_flags TEXT,
-                    trailing_exit_monitoring BOOLEAN DEFAULT FALSE,
-                    trailing_exit_start_time TIMESTAMP,
-                    trailing_exit_start_price REAL DEFAULT 0,
-                    total_trades INTEGER DEFAULT 0,
-                    winning_trades INTEGER DEFAULT 0,
-                    losing_trades INTEGER DEFAULT 0,
-                    total_pnl REAL DEFAULT 0,
-                    avg_trade_duration REAL DEFAULT 0,
-                    hedge_active BOOLEAN DEFAULT FALSE,
-                    hedge_shares INTEGER DEFAULT 0,
-                    hedge_symbol TEXT,
-                    hedge_level REAL DEFAULT 0,
-                    hedge_beta REAL DEFAULT 0,
-                    hedge_entry_price REAL DEFAULT 0,
-                    hedge_entry_time TIMESTAMP,
-                    hedge_exit_price REAL DEFAULT 0,
-                    hedge_pnl REAL DEFAULT 0
-                )
-            ''')
-            
-            conn.commit()
-            conn.close()
+        try:
+            with self.lock:
+                print(f"Initializing database at: {self.db_path}")
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                # Create a single table for all stock strategy data
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS stock_strategies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT UNIQUE NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        score REAL DEFAULT 0,
+                        additional_checks_passed BOOLEAN DEFAULT FALSE,
+                        position_active BOOLEAN DEFAULT FALSE,
+                        position_shares INTEGER DEFAULT 0,
+                        shares INTEGER DEFAULT 0,
+                        current_price REAL DEFAULT 0,
+                        entry_price REAL DEFAULT 0,
+                        stop_loss_price REAL DEFAULT 0,
+                        take_profit_price REAL DEFAULT 0,
+                        used_capital REAL DEFAULT 0,
+                        unrealized_pnl REAL DEFAULT 0,
+                        realized_pnl REAL DEFAULT 0,
+                        entry_time TIMESTAMP,
+                        close_time TIMESTAMP,
+                        profit_booking_levels TEXT,
+                        trailing_exit_conditions TEXT,
+                        trailing_stop_levels TEXT,
+                        profit_booked_flags TEXT,
+                        trailing_stop_flags TEXT,
+                        trailing_exit_monitoring BOOLEAN DEFAULT FALSE,
+                        trailing_exit_start_time TIMESTAMP,
+                        trailing_exit_start_price REAL DEFAULT 0,
+                        total_trades INTEGER DEFAULT 0,
+                        winning_trades INTEGER DEFAULT 0,
+                        losing_trades INTEGER DEFAULT 0,
+                        total_pnl REAL DEFAULT 0,
+                        avg_trade_duration REAL DEFAULT 0,
+                        hedge_active BOOLEAN DEFAULT FALSE,
+                        hedge_shares INTEGER DEFAULT 0,
+                        hedge_symbol TEXT,
+                        hedge_level REAL DEFAULT 0,
+                        hedge_beta REAL DEFAULT 0,
+                        hedge_entry_price REAL DEFAULT 0,
+                        hedge_entry_time TIMESTAMP,
+                        hedge_exit_price REAL DEFAULT 0,
+                        hedge_pnl REAL DEFAULT 0
+                    )
+                ''')
+                
+                conn.commit()
+                print("Database table 'stock_strategies' created successfully")
+                
+                # Verify table was created
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
+                table_exists = cursor.fetchone()
+                if table_exists:
+                    print("✓ Database initialization completed successfully")
+                else:
+                    print("✗ Database initialization failed - table not found after creation")
+                
+                conn.close()
+        except Exception as e:
+            print(f"Error during database initialization: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def verify_database(self):
+        """Verify that the database and table exist"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                # Check if table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
+                table_exists = cursor.fetchone()
+                
+                if table_exists:
+                    print("✓ Database verification passed - stock_strategies table exists")
+                    conn.close()
+                    return True
+                else:
+                    print("✗ Database verification failed - stock_strategies table not found")
+                    conn.close()
+                    return False
+        except Exception as e:
+            print(f"Error during database verification: {e}")
+            return False
     
     def backup_database(self):
-        """Backup the current database to historical_data folder with date-based naming using creation date"""
+        """Backup the current database to historical_data folder with date-based naming using last modified date"""
         if not os.path.exists(self.db_path):
             return False
             
@@ -76,17 +164,17 @@ class TradesDatabase:
         if not os.path.exists(historical_dir):
             os.makedirs(historical_dir)
         
-        # Get database creation date
-        db_creation_time = os.path.getctime(self.db_path)
-        creation_date = datetime.fromtimestamp(db_creation_time).strftime("%Y-%m-%d")
+        # Get database last modified date
+        db_modified_time = os.path.getmtime(self.db_path)
+        modified_date = datetime.fromtimestamp(db_modified_time).strftime("%Y-%m-%d")
         
-        # Create backup filename using creation date
-        backup_filename = f"trades_{creation_date}.db"
+        # Create backup filename using last modified date
+        backup_filename = f"trades_{modified_date}.db"
         backup_path = os.path.join(historical_dir, backup_filename)
         
-        # If backup already exists for this creation date, add timestamp
+        # If backup already exists for this modified date, add timestamp
         if os.path.exists(backup_path):
-            timestamp = datetime.fromtimestamp(db_creation_time).strftime("%Y-%m-%d_%H-%M-%S")
+            timestamp = datetime.fromtimestamp(db_modified_time).strftime("%Y-%m-%d_%H-%M-%S")
             backup_filename = f"trades_{timestamp}.db"
             backup_path = os.path.join(historical_dir, backup_filename)
         
@@ -239,23 +327,29 @@ class TradesDatabase:
     def add_stocks_from_list(self, stock_list):
         """Add multiple stocks from a list"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
-            for symbol in stock_list:
-                cursor.execute('''
-                    INSERT OR IGNORE INTO stock_strategies (symbol, additional_checks_passed, updated_at) 
-                    VALUES (?, 0, CURRENT_TIMESTAMP)
-                ''', (symbol,))
-            
-            conn.commit()
-            conn.close()
-            print(f"Added {len(stock_list)} stocks to database")
+            try:
+                for symbol in stock_list:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO stock_strategies (symbol, additional_checks_passed, updated_at) 
+                        VALUES (?, 0, CURRENT_TIMESTAMP)
+                    ''', (symbol,))
+                
+                conn.commit()
+                print(f"Added {len(stock_list)} stocks to database")
+            except Exception as e:
+                print(f"Error adding stocks to database: {e}")
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
     
     def update_strategy_data(self, symbol, **kwargs):
         """Update strategy data for a specific stock"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
             # Prepare the update query dynamically
@@ -358,104 +452,124 @@ class TradesDatabase:
     def insert_strategy_data(self, symbol, **kwargs):
         """Insert new strategy data record (standalone method with lock)"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
-            self._insert_strategy_data_with_connection(cursor, symbol, **kwargs)
-            
-            conn.commit()
-            conn.close()
+            try:
+                self._insert_strategy_data_with_connection(cursor, symbol, **kwargs)
+                conn.commit()
+            except Exception as e:
+                print(f"Error inserting strategy data: {e}")
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
     
     def get_latest_strategy_data(self, symbol):
         """Get the strategy data for a specific stock"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT * FROM stock_strategies 
-                WHERE symbol = ?
-            ''', (symbol,))
-            
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                columns = [description[0] for description in cursor.description]
-                data = dict(zip(columns, row))
+            try:
+                cursor.execute('''
+                    SELECT * FROM stock_strategies 
+                    WHERE symbol = ?
+                ''', (symbol,))
                 
-                # Convert boolean fields from SQLite integers to Python booleans
-                boolean_fields = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
-                for field in boolean_fields:
-                    if field in data and data[field] is not None:
-                        data[field] = bool(data[field])
+                row = cursor.fetchone()
                 
-                return data
-            return None
+                if row:
+                    columns = [description[0] for description in cursor.description]
+                    data = dict(zip(columns, row))
+                    
+                    # Convert boolean fields from SQLite integers to Python booleans
+                    boolean_fields = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+                    for field in boolean_fields:
+                        if field in data and data[field] is not None:
+                            data[field] = bool(data[field])
+                    
+                    return data
+                return None
+            except Exception as e:
+                print(f"Error getting strategy data: {e}")
+                return None
+            finally:
+                conn.close()
     
     def get_all_active_positions(self):
         """Get all currently active positions"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT symbol, position_shares, shares, entry_price, current_price, 
-                       stop_loss_price, take_profit_price, unrealized_pnl, realized_pnl, entry_time
-                FROM stock_strategies 
-                WHERE position_active = 1
-            ''')
-            
-            rows = cursor.fetchall()
-            conn.close()
-            
-            columns = ['symbol', 'position_shares', 'shares', 'entry_price', 'current_price', 
-                      'stop_loss_price', 'take_profit_price', 'unrealized_pnl', 'realized_pnl', 'entry_time']
-            
-            return [dict(zip(columns, row)) for row in rows]
+            try:
+                cursor.execute('''
+                    SELECT symbol, position_shares, shares, entry_price, current_price, 
+                           stop_loss_price, take_profit_price, unrealized_pnl, realized_pnl, entry_time
+                    FROM stock_strategies 
+                    WHERE position_active = 1
+                ''')
+                
+                rows = cursor.fetchall()
+                
+                columns = ['symbol', 'position_shares', 'shares', 'entry_price', 'current_price', 
+                          'stop_loss_price', 'take_profit_price', 'unrealized_pnl', 'realized_pnl', 'entry_time']
+                
+                return [dict(zip(columns, row)) for row in rows]
+            except Exception as e:
+                print(f"Error getting active positions: {e}")
+                return []
+            finally:
+                conn.close()
     
     def get_strategy_summary(self):
         """Get summary of all strategies"""
         with self.lock:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                SELECT 
-                    symbol,
-                    score,
-                    position_active,
-                    position_shares,
-                    shares,
-                    current_price,
-                    entry_price,
-                    unrealized_pnl,
-                    realized_pnl,
-                    total_trades,
-                    winning_trades,
-                    losing_trades,
-                    total_pnl
-                FROM stock_strategies 
-                ORDER BY symbol
-            ''')
-            
-            rows = cursor.fetchall()
-            conn.close()
-            
-            columns = ['symbol', 'score', 'position_active', 'position_shares', 'shares',
-                      'current_price', 'entry_price', 'unrealized_pnl', 'realized_pnl', 'total_trades', 
-                      'winning_trades', 'losing_trades', 'total_pnl']
-            
-            # Convert boolean fields from SQLite integers to Python booleans
-            result = []
-            for row in rows:
-                data = dict(zip(columns, row))
-                # Convert position_active from integer to boolean
-                if 'position_active' in data and data['position_active'] is not None:
-                    data['position_active'] = bool(data['position_active'])
-                result.append(data)
-            
-            return result
+            try:
+                cursor.execute('''
+                    SELECT 
+                        symbol,
+                        score,
+                        position_active,
+                        position_shares,
+                        shares,
+                        current_price,
+                        entry_price,
+                        unrealized_pnl,
+                        realized_pnl,
+                        total_trades,
+                        winning_trades,
+                        losing_trades,
+                        total_pnl
+                    FROM stock_strategies 
+                    ORDER BY symbol
+                ''')
+                
+                rows = cursor.fetchall()
+                
+                columns = ['symbol', 'score', 'position_active', 'position_shares', 'shares',
+                          'current_price', 'entry_price', 'unrealized_pnl', 'realized_pnl', 'total_trades', 
+                          'winning_trades', 'losing_trades', 'total_pnl']
+                
+                # Convert boolean fields from SQLite integers to Python booleans
+                result = []
+                for row in rows:
+                    data = dict(zip(columns, row))
+                    # Convert position_active from integer to boolean
+                    if 'position_active' in data and data['position_active'] is not None:
+                        data['position_active'] = bool(data['position_active'])
+                    result.append(data)
+                
+                return result
+            except Exception as e:
+                print(f"Error getting strategy summary: {e}")
+                return []
+            finally:
+                conn.close()
 
 # Global database instance
 trades_db = TradesDatabase()

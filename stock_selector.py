@@ -32,7 +32,7 @@ creds = load_config('creds.json')
 
 
 class StockSelector:
-    def __init__(self, csv_path='companies_by_marketcap.csv'):
+    def __init__(self, csv_path='companies_by_marketcap.csv', client_id=None):
         self.csv_path = csv_path
         self.market_cap_filter = creds.STOCK_SELECTION.market_cap_min
         self.price_filter = creds.STOCK_SELECTION.price_min
@@ -43,7 +43,7 @@ class StockSelector:
         self.rvol_filter = creds.STOCK_SELECTION.RVOL_filter
         self.rvol_length = creds.STOCK_SELECTION.RVOL_length
         # self.client = SchwabBroker()
-        self.client = IBTWSAPI()
+        self.client = IBTWSAPI(client_id=client_id) if client_id is not None else IBTWSAPI()
         self.client.connect()
         self.batch_size = 50
 
@@ -60,6 +60,15 @@ class StockSelector:
         # ADV data caching
         self.adv_cache_file = "adv_cache.pkl"
         self.adv_data_cache = {}
+
+    def disconnect(self):
+        """Disconnect from IBKR broker"""
+        if self.client and hasattr(self.client, 'client') and self.client.client:
+            try:
+                self.client.client.disconnect()
+                print("Disconnected from IBKR broker")
+            except Exception as e:
+                print(f"Error disconnecting from IBKR broker: {e}")
 
     def load_and_filter_market_cap(self):
         
@@ -555,6 +564,10 @@ def initialize_stock_selector():
     selector.load_and_filter_market_cap()
     end_time = time.time()
     print(f"Time taken {end_time-start_time}")
+    
+    # Disconnect from IBKR to free up the client ID
+    selector.disconnect()
+    print("Disconnected from IBKR broker after initialization")
 
 if __name__ == "__main__":
     initialize_stock_selector()
