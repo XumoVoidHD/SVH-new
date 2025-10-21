@@ -164,7 +164,7 @@ class Strategy:
 
     def get_historical_data_with_retry(self, stock, duration="3 D", bar_size="3 mins"):
         """Get historical data with exponential backoff retry logic"""
-        return self._safe_broker_call(self.broker.get_historical_data, stock=stock, duration=duration, bar_size=bar_size)
+        return self._safe_broker_call(self.broker.get_historical_data_stock, stock=stock, duration=duration, bar_size=bar_size)
     
     def is_entry_time_window(self):
         """Check if current time is within entry time windows"""
@@ -950,7 +950,17 @@ class Strategy:
             # Check VWAP slope
             vwap_slope_check = self._check_vwap_slope()
             
-            self.additional_checks_passed = bool(volume_check and vwap_slope_check)
+            # Alpha Score based TRIN/TICK check
+            # If Alpha Score >= 85 → enter without TRIN/TICK check
+            # If Alpha Score < 85 → require both TRIN <= 1.1 and TICK 1-min MA >= 0
+            if self.score >= 85:
+                market_conditions_check = True
+                print(f"Alpha Score >= 85 ({self.score}) - Bypassing TRIN/TICK check")
+            else:
+                market_conditions_check = self._check_trin_tick_conditions()
+                print(f"Alpha Score < 85 ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
+            
+            self.additional_checks_passed = bool(volume_check and vwap_slope_check and market_conditions_check)
             
             print(f"\nAdditional Checks Passed: {self.additional_checks_passed}")
         
@@ -973,7 +983,51 @@ class Strategy:
         
         print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
         
-        return slope_ok 
+        return slope_ok
+    
+    def _check_trin_tick_conditions(self):
+        """Check TRIN and TICK market breadth conditions"""
+        try:
+            # Get configurable thresholds
+            trin_threshold = self.additional_checks_config.trin_threshold
+            tick_ma_window = self.additional_checks_config.tick_ma_window
+            tick_threshold = self.additional_checks_config.tick_threshold
+            
+            # Check TRIN (NYSE TRIN index) - should be <= threshold
+            # TRIN > 1.0 indicates bearish sentiment, TRIN < 1.0 indicates bullish
+            trin_data = self.broker.get_historical_data_index(symbol="TRIN-NYSE", bar_size="1 min", duration="1 D")
+            trin_check = False
+            
+            if trin_data is not None and not trin_data.empty and 'close' in trin_data.columns:
+                current_trin = trin_data['close'].iloc[-1]
+                trin_check = bool(current_trin <= trin_threshold)
+                print(f"TRIN-NYSE check: {current_trin:.2f} {'<=' if trin_check else '>'} {trin_threshold} - {'Passed' if trin_check else 'Failed'}")
+            else:
+                print("TRIN-NYSE data unavailable - treating as failed")
+                return False
+            
+            # Check TICK (NYSE TICK) - MA should be >= threshold
+            # TICK shows net upticks minus downticks, positive = more buying pressure
+            tick_data = self.broker.get_historical_data_index(symbol="TICK-NYSE", bar_size="1 min", duration="1 D")
+            tick_check = False
+            
+            if tick_data is not None and not tick_data.empty and 'close' in tick_data.columns:
+                # Calculate moving average of TICK with configurable window
+                tick_ma = tick_data['close'].rolling(window=tick_ma_window).mean()
+                current_tick_ma = tick_ma.iloc[-1]
+                tick_check = bool(current_tick_ma >= tick_threshold)
+                print(f"TICK-NYSE {tick_ma_window}-min MA check: {current_tick_ma:.0f} {'>=' if tick_check else '<'} {tick_threshold} - {'Passed' if tick_check else 'Failed'}")
+            else:
+                print("TICK-NYSE data unavailable - treating as failed")
+                return False
+            
+            # Both conditions must pass
+            return bool(trin_check and tick_check)
+            
+        except Exception as e:
+            print(f"Error checking TRIN/TICK conditions: {e}")
+            traceback.print_exc()
+            return False 
         
     def calculate_position_size(self):
         
@@ -1034,7 +1088,7 @@ class Strategy:
             print(f"WARNING: VWAP (${vwap_value:.2f}) is NOT below current price (${current_price:.2f}) - skipping order")
             return 0, 0, 0, 0
         
-        offset_pct = random.uniform(creds.ORDER_CONFIG.limit_offset_min, creds.ORDER_CONFIG.limit_offset_max)  # 0.03% to 0.07%
+        offset_pct = random.uniform(creds.ORDER_CONFIG.limit_offset_min, creds.ORDER_CONFIG.limit_offset_max)
         limit_price = current_price * (1 + offset_pct)
         
         print(f"Position Size: {shares} shares")
@@ -1412,7 +1466,8 @@ class Strategy:
                     realized_pnl=self.realized_pnl,
                     unrealized_pnl=0,
                     current_price=current_price,
-                    used_capital=self.used_capital
+                    used_capital=self.used_capital,
+                    close_time=self.close_time
                 )
         else:
             # Partial position closure
@@ -1654,7 +1709,7 @@ class StrategyBroker:
             self.request_id_counter += 1
         return self.ib_broker.get_current_price(symbol, req_id)
 
-    def get_historical_data(self, stock, duration="3 D", bar_size="3 mins"):
+    def get_historical_data_stock(self, stock, duration="3 D", bar_size="3 mins"):
         """Get historical data for symbol"""
         # Valid bar sizes according to IBKR API
         valid_bar_sizes = {
@@ -1666,9 +1721,15 @@ class StrategyBroker:
         
         # Convert bar_size to proper IBKR format
         if isinstance(bar_size, (int, str)) and str(bar_size).isdigit():
-            bar_size = f"{bar_size} mins"
+            # Special case for 1: "1 min" not "1 mins"
+            if int(bar_size) == 1:
+                bar_size = "1 min"
+            else:
+                bar_size = f"{bar_size} mins"
         elif isinstance(bar_size, str) and bar_size.endswith(' min'):
-            bar_size = bar_size.replace(' min', ' mins')
+            # Don't convert "1 min" to "1 mins" - it's already correct
+            if not bar_size.startswith('1 '):
+                bar_size = bar_size.replace(' min', ' mins')
         
         # Validate bar size
         if bar_size not in valid_bar_sizes:
@@ -1678,7 +1739,39 @@ class StrategyBroker:
         with self.counter_lock:
             req_id = self.request_id_counter + 1000  # Offset for historical data
             self.request_id_counter += 1
-        return self.ib_broker.get_historical_data(stock, req_id, duration, bar_size)
+        return self.ib_broker.get_historical_data_stock(stock, req_id, duration, bar_size)
+    
+    def get_historical_data_index(self, symbol, duration="1 D", bar_size="1 min"):
+        """Get historical data for index symbols like TRIN-NYSE, TICK-NYSE"""
+        # Valid bar sizes according to IBKR API
+        valid_bar_sizes = {
+            '1 secs', '5 secs', '10 secs', '15 secs', '30 secs',
+            '1 min', '2 mins', '3 mins', '5 mins', '10 mins', '15 mins', '20 mins', '30 mins',
+            '1 hour', '2 hours', '3 hours', '4 hours', '8 hours',
+            '1 day', '1W', '1M'
+        }
+        
+        # Convert bar_size to proper IBKR format
+        if isinstance(bar_size, (int, str)) and str(bar_size).isdigit():
+            # Special case for 1: "1 min" not "1 mins"
+            if int(bar_size) == 1:
+                bar_size = "1 min"
+            else:
+                bar_size = f"{bar_size} mins"
+        elif isinstance(bar_size, str) and bar_size.endswith(' min'):
+            # Don't convert "1 min" to "1 mins" - it's already correct
+            if not bar_size.startswith('1 '):
+                bar_size = bar_size.replace(' min', ' mins')
+        
+        # Validate bar size
+        if bar_size not in valid_bar_sizes:
+            print(f"Warning: Invalid bar size '{bar_size}'. Using '1 min' as fallback.")
+            bar_size = '1 min'
+        
+        with self.counter_lock:
+            req_id = self.request_id_counter + 3000  # Offset for index data
+            self.request_id_counter += 1
+        return self.ib_broker.get_historical_data_index(symbol, req_id, duration, bar_size)
 
     def is_connected(self):
         """Check if connected to IBKR"""
@@ -1811,7 +1904,7 @@ class StrategyManager:
         
         # Start drawdown monitoring thread AFTER everything is initialized
         drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
-        drawdown_thread.start()
+        # drawdown_thread.start()
     
     def calculate_portfolio_atr14(self):
         try:
@@ -1822,7 +1915,7 @@ class StrategyManager:
                 if strategy.position_active and strategy.position_shares > 0:
                     active_count += 1
                     try:
-                        data_3min = self.get_historical_data_with_retry(stock=strategy.stock, bar_size=3)
+                        data_3min = self.broker.get_historical_data_stock(stock=strategy.stock, bar_size=3)
                         if data_3min is not None and not data_3min.empty:
                             atr14 = atr.calc_atr(data_3min, 14)
                             if atr14 is not None and not atr14.empty:
@@ -1978,10 +2071,104 @@ class StrategyManager:
         
         
     def test(self):
-        vix_df = self.get_current_price_with_retry("NTNX")
-        print(vix_df)
-        strategy = Strategy(self, "NTNX", self.broker, self.config)
-        print(strategy.calculate_position_size())
+        print("=" * 80)
+        print("Testing TRIN-NYSE and TICK-NYSE Check Logic for AAPL")
+        print("=" * 80)
+        
+        # Create a strategy for AAPL
+        print("\n[Step 1] Creating Strategy for AAPL...")
+        strategy = Strategy(self, "AAPL", self.broker, self.config)
+        print("✓ Strategy created")
+        
+        # Test TRIN-NYSE data
+        print("\n" + "=" * 80)
+        print("[Step 2] Fetching TRIN-NYSE index data (1-min bars, 1 day)...")
+        print("=" * 80)
+        try:
+            trin_data = self.broker.get_historical_data_index(symbol="TRIN-NYSE", bar_size="1 min", duration="1 D")
+            if trin_data is not None and not trin_data.empty:
+                print(f"✓ TRIN-NYSE data fetched successfully!")
+                print(f"  Total Rows: {len(trin_data)}")
+                print(f"  Columns: {list(trin_data.columns)}")
+                print(f"\n  First 5 rows:")
+                print(f"{trin_data.head()}")
+                print(f"\n  Last 5 rows:")
+                print(f"{trin_data.tail()}")
+                
+                # Perform TRIN check
+                current_trin = trin_data['close'].iloc[-1]
+                trin_threshold = 1.1
+                trin_check = current_trin <= trin_threshold
+                
+                print(f"\n  TRIN CHECK:")
+                print(f"  - Current TRIN value: {current_trin:.3f}")
+                print(f"  - Threshold: <= {trin_threshold}")
+                print(f"  - Result: {'✓ PASSED' if trin_check else '✗ FAILED'} ({current_trin:.3f} {'<=' if trin_check else '>'} {trin_threshold})")
+            else:
+                print("✗ TRIN-NYSE data is None or empty")
+                trin_check = False
+        except Exception as e:
+            print(f"✗ Error fetching TRIN-NYSE: {e}")
+            traceback.print_exc()
+            trin_check = False
+        
+        # Test TICK-NYSE data
+        print("\n" + "=" * 80)
+        print("[Step 3] Fetching TICK-NYSE index data (1-min bars, 1 day)...")
+        print("=" * 80)
+        try:
+            tick_data = self.broker.get_historical_data_index(symbol="TICK-NYSE", bar_size="1 min", duration="1 D")
+            if tick_data is not None and not tick_data.empty:
+                print(f"✓ TICK-NYSE data fetched successfully!")
+                print(f"  Total Rows: {len(tick_data)}")
+                print(f"  Columns: {list(tick_data.columns)}")
+                print(f"\n  First 5 rows:")
+                print(f"{tick_data.head()}")
+                print(f"\n  Last 5 rows:")
+                print(f"{tick_data.tail()}")
+                
+                # Perform TICK check
+                tick_ma = tick_data['close'].rolling(window=1).mean()
+                current_tick_ma = tick_ma.iloc[-1]
+                tick_threshold = 0
+                tick_check = current_tick_ma >= tick_threshold
+                
+                print(f"\n  TICK CHECK:")
+                print(f"  - Latest TICK value: {tick_data['close'].iloc[-1]:.0f}")
+                print(f"  - TICK 1-min MA: {current_tick_ma:.0f}")
+                print(f"  - Threshold: >= {tick_threshold}")
+                print(f"  - Result: {'✓ PASSED' if tick_check else '✗ FAILED'} ({current_tick_ma:.0f} {'>=' if tick_check else '<'} {tick_threshold})")
+            else:
+                print("✗ TICK-NYSE data is None or empty")
+                tick_check = False
+        except Exception as e:
+            print(f"✗ Error fetching TICK-NYSE: {e}")
+            traceback.print_exc()
+            tick_check = False
+        
+        # Combined result
+        print("\n" + "=" * 80)
+        print("[Step 4] Combined TRIN/TICK Check Result")
+        print("=" * 80)
+        print(f"  TRIN Check: {'✓ PASSED' if trin_check else '✗ FAILED'}")
+        print(f"  TICK Check: {'✓ PASSED' if tick_check else '✗ FAILED'}")
+        print(f"  Overall: {'✓ BOTH PASSED' if (trin_check and tick_check) else '✗ AT LEAST ONE FAILED'}")
+        
+        # Test using the actual strategy method
+        print("\n" + "=" * 80)
+        print("[Step 5] Testing strategy._check_trin_tick_conditions() method")
+        print("=" * 80)
+        try:
+            result = strategy._check_trin_tick_conditions()
+            print(f"  Method returned: {result}")
+            print(f"  Result: {'✓ PASSED' if result else '✗ FAILED'}")
+        except Exception as e:
+            print(f"  ✗ Error calling _check_trin_tick_conditions: {e}")
+            traceback.print_exc()
+        
+        print("\n" + "=" * 80)
+        print("Test complete!")
+        print("=" * 80)
         exit()
 
 

@@ -115,6 +115,15 @@ class IBBroker(EWrapper, EClient):
         contract.exchange = "SMART"
         contract.currency = "USD"
         return contract
+    
+    def index_contract(self, symbol: str):
+        """Create index contract for market breadth indicators like TRIN, TICK"""
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "IND"
+        contract.exchange = "NYSE"
+        contract.currency = "USD"
+        return contract
 
     def tickPrice(self, reqId, tickType, price, attrib):
         with self.lock:
@@ -140,7 +149,7 @@ class IBBroker(EWrapper, EClient):
 
 
 
-    def get_historical_data(self, symbol, reqId, duration="3 D", bar_size="3 mins"):
+    def get_historical_data_stock(self, symbol, reqId, duration="3 D", bar_size="3 mins"):
         """Get historical data for symbol"""
         contract = self.stock_contract(symbol)
         self.reqHistoricalData(
@@ -151,6 +160,31 @@ class IBBroker(EWrapper, EClient):
             bar_size,      # bar size parameter
             "TRADES",      # data type
             0,             # useRTH
+            1,             # formatDate
+            False,         # keepUpToDate
+            []
+        )
+
+        for _ in range(30):
+            time.sleep(0.5)
+            with self.lock:
+                if reqId in self.historical_data:
+                    df = pd.DataFrame(self.historical_data[reqId])
+                    df["date"] = pd.to_datetime(df["date"])
+                    return df
+        return None
+    
+    def get_historical_data_index(self, symbol, reqId, duration="1 D", bar_size="1 min"):
+        """Get historical data for index symbols like TRIN-NYSE, TICK-NYSE"""
+        contract = self.index_contract(symbol)
+        self.reqHistoricalData(
+            reqId,
+            contract,
+            "",            # endDateTime ("" = now)
+            duration,      # duration parameter
+            bar_size,      # bar size parameter
+            "TRADES",      # data type
+            0,             # useRTH (0 = include extended hours)
             1,             # formatDate
             False,         # keepUpToDate
             []

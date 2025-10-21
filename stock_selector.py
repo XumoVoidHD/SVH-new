@@ -503,13 +503,16 @@ class StockSelector:
             self.top_sectors = []
             return
 
+        # Use configurable top_sectors_count from creds.json
+        top_sectors_count = creds.STOCK_SELECTION.top_sectors_count
+        
         self.top_sectors = sorted(
             self.sector_returns.items(),
             key=lambda x: sum(x[1]) / len(x[1]),
             reverse=True
-        )[:3]
+        )[:top_sectors_count]
 
-        print("\nTop 3 Sectors by Avg 5-Day Alpha:")
+        print(f"\nTop {top_sectors_count} Sectors by Avg 5-Day Alpha:")
         for sector, alphas in self.top_sectors:
             avg_alpha = sum(alphas) / len(alphas)
             count = len([s for s in self.qualified if s["sector"] == sector])
