@@ -132,7 +132,8 @@
         "monthly_drawdown_limit": 0.08,
         "drawdown_alert": 0.015,
         "lower_limit": 0.02,
-        "upper_limit": 0.03
+        "upper_limit": 0.03,
+        "atr_multiplier": 1.5
     },
     "STOP_LOSS_CONFIG": {
         "default_stop_loss": 0.015,
@@ -187,20 +188,20 @@
             "vix_exit_threshold": 20,
             "vix_slope_period": 10,
             "sp500_recovery_threshold": 0.006,
-            "qqq_vwap_consecutive_bars": 2
+            "sqqq_vwap_consecutive_bars": 2
         },
         "hedge_levels": {
             "early": {
                 "beta": 0.1,
-                "description": "Early hedge: Single risk indicator triggered"
+                "equity_pct": 0.033
             },
             "mild": {
                 "beta": 0.15,
-                "description": "Mild hedge: VIX elevated but market stable"
+                "equity_pct": 0.05
             },
             "severe": {
                 "beta": 0.3,
-                "description": "Severe hedge: Multiple risk indicators triggered"
+                "equity_pct": 0.10
             }
         }
     },

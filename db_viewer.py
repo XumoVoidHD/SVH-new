@@ -1914,8 +1914,8 @@ def main():
         
     elif page == "Configuration Editor":        
         # Create tabs for different config sections
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "Stock Selection", "Entry Rules", "Risk Management", 
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "Stock Selection", "Entry Rules", "Risk Management", "Drawdown Limits",
             "Stop Loss & Profit", "Hedge & Leverage", "Trading Hours"
         ])
         
@@ -2215,6 +2215,7 @@ def main():
                     key="risk_per_trade", 
                     format="%.3f"
                 )
+            with col2:
                 max_position_equity_pct = st.number_input(
                     "Max Position Equity (%):", 
                     min_value=0.01, 
@@ -2232,62 +2233,6 @@ def main():
                     value=risk_config.get('max_daily_trades', 10), 
                     step=1, 
                     key="max_daily_trades"
-                )
-            with col2:
-                daily_drawdown = st.number_input(
-                    "Daily Drawdown Limit (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=risk_config.get('daily_drawdown_limit', 0.02), 
-                    step=0.001, 
-                    key="daily_drawdown", 
-                    format="%.3f"
-                )
-                monthly_drawdown = st.number_input(
-                    "Monthly Drawdown Limit (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=risk_config.get('monthly_drawdown_limit', 0.08), 
-                    step=0.001, 
-                    key="monthly_drawdown", 
-                    format="%.3f"
-                )
-                drawdown_alert = st.number_input(
-                    "Drawdown Alert (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=risk_config.get('drawdown_alert', 0.015), 
-                    step=0.001, 
-                    key="drawdown_alert", 
-                    format="%.3f"
-                )
-            
-            # Dynamic Drawdown Limits
-            st.markdown("---")
-            st.write("**Dynamic Daily Limit Configuration**")
-            st.markdown("*Dynamic limit = min(lower_limit, 1.5 x Portfolio ATR14, upper_limit)*")
-            col1, col2 = st.columns(2)
-            with col1:
-                lower_limit = st.number_input(
-                    "Lower Limit (%):", 
-                    min_value=0.001, 
-                    max_value=0.05, 
-                    value=risk_config.get('lower_limit', 0.02), 
-                    step=0.001, 
-                    key="lower_limit", 
-                    format="%.3f",
-                    help="Minimum daily drawdown limit (e.g., 0.02 = 2% of equity)"
-                )
-            with col2:
-                upper_limit = st.number_input(
-                    "Upper Limit (%):", 
-                    min_value=0.001, 
-                    max_value=0.10, 
-                    value=risk_config.get('upper_limit', 0.03), 
-                    step=0.001, 
-                    key="upper_limit", 
-                    format="%.3f",
-                    help="Maximum daily drawdown limit cap (e.g., 0.03 = 3% of equity)"
                 )
             
             # Order Configuration
@@ -2325,8 +2270,88 @@ def main():
                     step=10, 
                     key="order_window"
                 )
-                            
+        
         with tab4:
+            st.subheader("Drawdown Limits Configuration")
+            
+            risk_config = config.get('RISK_CONFIG', {})
+            
+            st.write("**Fixed Drawdown Limits**")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                daily_drawdown = st.number_input(
+                    "Daily Drawdown Limit (%):", 
+                    min_value=0.001, 
+                    max_value=1.0, 
+                    value=risk_config.get('daily_drawdown_limit', 0.02), 
+                    step=0.001, 
+                    key="daily_drawdown", 
+                    format="%.3f"
+                )
+            with col2:
+                monthly_drawdown = st.number_input(
+                    "Monthly Drawdown Limit (%):", 
+                    min_value=0.001, 
+                    max_value=1.0, 
+                    value=risk_config.get('monthly_drawdown_limit', 0.08), 
+                    step=0.001, 
+                    key="monthly_drawdown", 
+                    format="%.3f"
+                )
+            with col3:
+                drawdown_alert = st.number_input(
+                    "Drawdown Alert (%):", 
+                    min_value=0.001, 
+                    max_value=1.0, 
+                    value=risk_config.get('drawdown_alert', 0.015), 
+                    step=0.001, 
+                    key="drawdown_alert", 
+                    format="%.3f"
+                )
+            
+            # Dynamic Drawdown Limits
+            st.markdown("---")
+            st.write("**Dynamic Daily Limit Configuration**")
+            
+            atr_multiplier_dd = risk_config.get('atr_multiplier', 1.5)
+            st.markdown(f"*Dynamic limit = min(lower_limit, {atr_multiplier_dd} x Portfolio ATR14, upper_limit)*")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                lower_limit = st.number_input(
+                    "Lower Limit (%):", 
+                    min_value=0.001, 
+                    max_value=0.05, 
+                    value=risk_config.get('lower_limit', 0.02), 
+                    step=0.001, 
+                    key="lower_limit", 
+                    format="%.3f",
+                    help="Minimum daily drawdown limit (e.g., 0.02 = 2% of equity)"
+                )
+            with col2:
+                upper_limit = st.number_input(
+                    "Upper Limit (%):", 
+                    min_value=0.001, 
+                    max_value=0.10, 
+                    value=risk_config.get('upper_limit', 0.03), 
+                    step=0.001, 
+                    key="upper_limit", 
+                    format="%.3f",
+                    help="Maximum daily drawdown limit cap (e.g., 0.03 = 3% of equity)"
+                )
+            with col3:
+                atr_multiplier_dd = st.number_input(
+                    "ATR Multiplier:", 
+                    min_value=0.5, 
+                    max_value=3.0, 
+                    value=risk_config.get('atr_multiplier', 1.5), 
+                    step=0.1, 
+                    key="atr_multiplier_dd",
+                    format="%.1f",
+                    help="Multiplier for Portfolio ATR14 in dynamic limit calculation"
+                )
+                            
+        with tab5:
             st.subheader("Stop Loss & Profit Configuration")
             
             stop_loss_config = config.get('STOP_LOSS_CONFIG', {})
@@ -2524,7 +2549,7 @@ def main():
                     key="monitor_period"
                 )
      
-        with tab5:
+        with tab6:
             st.subheader("Hedge & Leverage Configuration")
             
             hedge_config = config.get('HEDGE_CONFIG', {})
@@ -2603,52 +2628,86 @@ def main():
                     format="%.3f",
                     help="S&P 500 gain threshold to trigger hedge reduction"
                 )
-                qqq_vwap_consecutive_bars = st.number_input(
-                    "QQQ VWAP Consecutive Bars:", 
+                sqqq_vwap_consecutive_bars = st.number_input(
+                    "SQQQ VWAP Consecutive Bars:", 
                     min_value=1, 
                     max_value=5, 
-                    value=hedge_config.get('exit_conditions', {}).get('qqq_vwap_consecutive_bars', 2), 
+                    value=hedge_config.get('exit_conditions', {}).get('sqqq_vwap_consecutive_bars', 2), 
                     step=1, 
-                    key="qqq_vwap_consecutive_bars",
-                    help="Number of consecutive bars QQQ must trade above VWAP"
+                    key="sqqq_vwap_consecutive_bars",
+                    help="Number of consecutive bars SQQQ must trade above VWAP"
                 )
             
             # Hedge Levels
             st.markdown("---")
             st.write("**Hedge Levels**")
+            
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.write("**Early Hedge**")
                 early_beta = st.number_input(
-                    "Early Hedge Beta:", 
+                    "Beta Offset:", 
                     min_value=0.01, 
                     max_value=1.0, 
                     value=hedge_config.get('hedge_levels', {}).get('early', {}).get('beta', 0.1), 
                     step=0.01, 
                     key="early_beta",
-                    format="%.2f"
+                    format="%.2f",
+                    help="Portfolio beta offset (e.g., 0.1 = -0.1β)"
+                )
+                early_equity_pct = st.number_input(
+                    "Equity % for Hedge:", 
+                    min_value=0.001, 
+                    max_value=0.5, 
+                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('equity_pct', 0.033), 
+                    step=0.001, 
+                    key="early_equity_pct",
+                    format="%.3f",
+                    help="Percentage of equity to allocate (e.g., 0.033 = 3.3%)"
                 )
             with col2:
                 st.write("**Mild Hedge**")
                 mild_beta = st.number_input(
-                    "Mild Hedge Beta:", 
+                    "Beta Offset:", 
                     min_value=0.01, 
                     max_value=1.0, 
                     value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('beta', 0.15), 
                     step=0.01, 
                     key="mild_beta",
-                    format="%.2f"
+                    format="%.2f",
+                    help="Portfolio beta offset (e.g., 0.15 = -0.15β)"
+                )
+                mild_equity_pct = st.number_input(
+                    "Equity % for Hedge:", 
+                    min_value=0.001, 
+                    max_value=0.5, 
+                    value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('equity_pct', 0.05), 
+                    step=0.001, 
+                    key="mild_equity_pct",
+                    format="%.3f",
+                    help="Percentage of equity to allocate (e.g., 0.05 = 5%)"
                 )
             with col3:
                 st.write("**Severe Hedge**")
                 severe_beta = st.number_input(
-                    "Severe Hedge Beta:", 
+                    "Beta Offset:", 
                     min_value=0.01, 
                     max_value=1.0, 
                     value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('beta', 0.30), 
                     step=0.01, 
                     key="severe_beta",
-                    format="%.2f"
+                    format="%.2f",
+                    help="Portfolio beta offset (e.g., 0.3 = -0.3β)"
+                )
+                severe_equity_pct = st.number_input(
+                    "Equity % for Hedge:", 
+                    min_value=0.001, 
+                    max_value=0.5, 
+                    value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('equity_pct', 0.10), 
+                    step=0.001, 
+                    key="severe_equity_pct",
+                    format="%.3f",
+                    help="Percentage of equity to allocate (e.g., 0.10 = 10%)"
                 )
             
             # # Leverage Configuration
@@ -2747,9 +2806,9 @@ def main():
             #         step=0.1, 
             #         key="default_leverage",
             #         format="%.1f"
-            #     )
+            #                     )
 
-        with tab6:
+        with tab7:
             st.subheader("Trading Hours Configuration")
             
             trading_hours_config = config.get('TRADING_HOURS', {})
@@ -2910,7 +2969,8 @@ def main():
                     "monthly_drawdown_limit": monthly_drawdown,
                     "drawdown_alert": drawdown_alert,
                     "lower_limit": lower_limit,
-                    "upper_limit": upper_limit
+                    "upper_limit": upper_limit,
+                    "atr_multiplier": atr_multiplier_dd
                 },
                 "STOP_LOSS_CONFIG": {
                     "default_stop_loss": default_stop,
@@ -2947,9 +3007,9 @@ def main():
                         "qqq_vwap_consecutive_bars": qqq_vwap_consecutive_bars
                     },
                     "hedge_levels": {
-                        "early": {"beta": early_beta},
-                        "mild": {"beta": mild_beta},
-                        "severe": {"beta": severe_beta}
+                        "early": {"beta": early_beta, "equity_pct": early_equity_pct},
+                        "mild": {"beta": mild_beta, "equity_pct": mild_equity_pct},
+                        "severe": {"beta": severe_beta, "equity_pct": severe_equity_pct}
                     }
                 },
                 # "LEVERAGE_CONFIG": {

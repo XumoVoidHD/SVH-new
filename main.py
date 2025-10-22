@@ -228,7 +228,7 @@ class Strategy:
     def check_hedge_triggers(self):
         """Check if hedge triggers are met and return hedge level"""
         if not self.hedge_config.enabled:
-            return None, 0
+            return None, 0, 0
         
         triggers_met = 0
         trigger_details = []
@@ -260,25 +260,28 @@ class Strategy:
         except Exception as e:
             print(f"Error checking hedge triggers: {e}")
             traceback.print_exc()
-            return None, 0
+            return None, 0, 0
         
         # Determine hedge level
         if triggers_met == 0:
-            return None, 0
+            return None, 0, 0
         elif triggers_met == 1:
             hedge_level = 'early'
             beta = self.hedge_config.hedge_levels.early.beta
+            equity_pct = self.hedge_config.hedge_levels.early.equity_pct
         elif triggers_met == 2:
             hedge_level = 'mild'
             beta = self.hedge_config.hedge_levels.mild.beta
+            equity_pct = self.hedge_config.hedge_levels.mild.equity_pct
         else:
             hedge_level = 'severe' 
             beta = self.hedge_config.hedge_levels.severe.beta
+            equity_pct = self.hedge_config.hedge_levels.severe.equity_pct
         
         print(f"Hedge triggers: {triggers_met} met - {', '.join(trigger_details)}")
-        print(f"Hedge level: {hedge_level} (-{beta}β)")
+        print(f"Hedge level: {hedge_level} (-{beta}β, {equity_pct*100:.1f}% of equity)")
         
-        return hedge_level, beta
+        return hedge_level, beta, equity_pct
     
     def calculate_sharpe_ratio(self, days=30):
         try:
@@ -447,15 +450,15 @@ class Strategy:
         
         return leverage
     
-    def execute_hedge(self, hedge_level, beta):
+    def execute_hedge(self, hedge_level, beta, equity_pct):
         """Execute hedge by buying SQQQ ETF"""
         if hedge_level is None or self.hedge_active:
             return
         
         try:
-            # Calculate hedge size
+            # Calculate hedge size using equity_pct
             account_equity = creds.EQUITY
-            hedge_amount = account_equity * beta
+            hedge_amount = account_equity * equity_pct
             
             # Get hedge symbol price
             hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
@@ -472,7 +475,8 @@ class Strategy:
                 return
             
             print(f"Executing {hedge_level} hedge:")
-            print(f"  - Hedge amount: ${hedge_amount:,.0f} ({beta*100:.1f}% of equity)")
+            print(f"  - Beta offset: -{beta}β")
+            print(f"  - Hedge amount: ${hedge_amount:,.0f} ({equity_pct*100:.1f}% of equity)")
             print(f"  - {self.hedge_symbol} price: ${trade[1]}")
             print(f"  - Shares to buy: {hedge_shares}")
             
@@ -532,21 +536,21 @@ class Strategy:
                     recovery_signals += 1
                     signal_details.append(f"S&P up {gain_pct*100:.1f}% > {sp500_recovery_threshold*100:.1f}%")
             
-            # Check Nasdaq (QQQ) trades above 5-min VWAP for 2+ consecutive bars
-            qqq_data = self.get_historical_data_with_retry(stock="QQQ", bar_size=5)
-            if not qqq_data.empty and len(qqq_data) >= 2 and 'close' in qqq_data.columns:
+            # Check Nasdaq (SQQQ) trades above 5-min VWAP for 2+ consecutive bars
+            sqqq_data = self.get_historical_data_with_retry(stock="SQQQ", bar_size=5)
+            if not sqqq_data.empty and len(sqqq_data) >= 2 and 'close' in sqqq_data.columns:
                 # Calculate 5-min VWAP
-                qqq_vwap = vwap.calc_vwap(qqq_data)
-                qqq_consecutive_bars = self.hedge_config.exit_conditions.qqq_vwap_consecutive_bars
-                if len(qqq_vwap) >= qqq_consecutive_bars:
-                    current_qqq = qqq_data['close'].iloc[-1]
-                    qqq_vwap_current = qqq_vwap.iloc[-1]
-                    qqq_vwap_prev = qqq_vwap.iloc[-2]
+                sqqq_vwap = vwap.calc_vwap(sqqq_data)
+                sqqq_consecutive_bars = self.hedge_config.exit_conditions.sqqq_vwap_consecutive_bars
+                if len(sqqq_vwap) >= sqqq_consecutive_bars:
+                    current_sqqq = sqqq_data['close'].iloc[-1]
+                    sqqq_vwap_current = sqqq_vwap.iloc[-1]
+                    sqqq_vwap_prev = sqqq_vwap.iloc[-2]
                     
-                    # Check if QQQ is above VWAP for 2+ consecutive bars
-                    if current_qqq > qqq_vwap_current and qqq_data['close'].iloc[-2] > qqq_vwap_prev:
+                    # Check if SQQQ is above VWAP for 2+ consecutive bars
+                    if current_sqqq > sqqq_vwap_current and sqqq_data['close'].iloc[-2] > sqqq_vwap_prev:
                         recovery_signals += 1
-                        signal_details.append(f"QQQ above 5-min VWAP for {qqq_consecutive_bars}+ bars")
+                        signal_details.append(f"SQQQ above 5-min VWAP for {sqqq_consecutive_bars}+ bars")
             
         except Exception as e:
             print(f"Error checking hedge exit conditions: {e}")
@@ -575,13 +579,15 @@ class Strategy:
                 # Severe (-0.3β) → cut to Mild (-0.15β)
                 new_level = 'mild'
                 new_beta = self.hedge_config.hedge_levels.mild.beta
-                print(f"Scaling hedge: Severe → Mild ({new_beta*100:.1f}% of equity)")
+                new_equity_pct = self.hedge_config.hedge_levels.mild.equity_pct
+                print(f"Scaling hedge: Severe → Mild (-{new_beta}β, {new_equity_pct*100:.1f}% of equity)")
                 
             elif current_hedge_level == 'mild':
                 # Mild (-0.15β) → cut to Early (-0.1β)
                 new_level = 'early'
                 new_beta = self.hedge_config.hedge_levels.early.beta
-                print(f"Scaling hedge: Mild → Early ({new_beta*100:.1f}% of equity)")
+                new_equity_pct = self.hedge_config.hedge_levels.early.equity_pct
+                print(f"Scaling hedge: Mild → Early (-{new_beta}β, {new_equity_pct*100:.1f}% of equity)")
                 
             elif current_hedge_level == 'early':
                 # Early (-0.1β) → exit fully
@@ -593,9 +599,9 @@ class Strategy:
                 print(f"Unknown hedge level: {current_hedge_level}")
                 return
             
-            # Calculate new hedge size
+            # Calculate new hedge size using equity_pct
             account_equity = creds.EQUITY
-            new_hedge_amount = account_equity * new_beta
+            new_hedge_amount = account_equity * new_equity_pct
             
             # Get current hedge price
             hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
@@ -628,7 +634,7 @@ class Strategy:
                 )
                 
                 print(f"Hedge scaled down successfully: {current_hedge_level} → {new_level}")
-                print(f"Remaining hedge: {self.hedge_shares} shares ({new_beta*100:.1f}% of equity)")
+                print(f"Remaining hedge: {self.hedge_shares} shares ({new_equity_pct*100:.1f}% of equity)")
             
         except Exception as e:
             print(f"Error scaling down hedge: {e}")
@@ -1037,9 +1043,9 @@ class Strategy:
         
     def calculate_position_size(self):
         
-        hedge_level, hedge_beta = self.check_hedge_triggers()
+        hedge_level, hedge_beta, hedge_equity_pct = self.check_hedge_triggers()
         if hedge_level:
-            self.execute_hedge(hedge_level, hedge_beta)
+            self.execute_hedge(hedge_level, hedge_beta, hedge_equity_pct)
         
         leverage_multiplier = self.check_leverage_conditions()
         self.current_leverage = leverage_multiplier
@@ -1953,7 +1959,8 @@ class StrategyManager:
         limit_2pct = equity * self.config.RISK_CONFIG.lower_limit
         
         portfolio_atr_pct = self.calculate_portfolio_atr14()
-        limit_atr = equity * (1.5 * portfolio_atr_pct)
+        atr_multiplier = self.config.RISK_CONFIG.atr_multiplier
+        limit_atr = equity * (atr_multiplier * portfolio_atr_pct)
         
         limit_3pct = equity * self.config.RISK_CONFIG.upper_limit
         
@@ -1962,7 +1969,7 @@ class StrategyManager:
         
         print(f"[Dynamic Daily Limit]")
         print(f"  - 2% equity: ${limit_2pct:,.0f}")
-        print(f"  - 1.5 x Portfolio ATR14: ${limit_atr:,.0f} (ATR={portfolio_atr_pct*100:.2f}%)")
+        print(f"  - {atr_multiplier} x Portfolio ATR14: ${limit_atr:,.0f} (ATR={portfolio_atr_pct*100:.2f}%)")
         print(f"  - 3% cap: ${limit_3pct:,.0f}")
         print(f"  - Selected limit: ${daily_limit_dollars:,.0f} ({daily_limit_pct*100:.2f}%)")
         
