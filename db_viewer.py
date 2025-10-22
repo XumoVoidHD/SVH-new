@@ -1914,21 +1914,21 @@ def main():
         
     elif page == "Configuration Editor":        
         # Create tabs for different config sections
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-            "Stock Selection", "Indicators", "Alpha Score", "Risk Management", 
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "Stock Selection", "Entry Rules", "Risk Management", 
             "Stop Loss & Profit", "Hedge & Leverage", "Trading Hours"
         ])
         
         with tab1:
             st.subheader("Stock Selection Configuration")
-            st.markdown("Configure stock filtering criteria for the trading system")
             
             stock_config = config.get('STOCK_SELECTION', {})
             
+            # Market Cap and Price Filter
+            st.markdown("---")
+            st.write("**Basic Filters**")
             col1, col2 = st.columns(2)
-            
             with col1:
-                st.write("**Market Cap Filter**")
                 market_cap_min = st.number_input(
                     "Minimum Market Cap ($):", 
                     min_value=100_000_000, 
@@ -1937,8 +1937,7 @@ def main():
                     step=100_000_000,
                     help="Minimum market capitalization in dollars"
                 )
-                
-                st.write("**Price Filter**")
+            with col2:
                 price_min = st.number_input(
                     "Minimum Price ($):", 
                     min_value=1.0, 
@@ -1947,8 +1946,12 @@ def main():
                     step=0.5,
                     help="Minimum stock price in dollars"
                 )
-                
-                st.write("**ADV Configuration**")
+            
+            st.markdown("---")
+            # ADV Configuration
+            st.write("**ADV Configuration**")
+            col1, col2 = st.columns(2)
+            with col1:
                 adv_large_length = st.number_input(
                     "ADV Large Length (days):", 
                     min_value=5, 
@@ -1957,7 +1960,6 @@ def main():
                     step=1,
                     help="Number of days for large ADV calculation"
                 )
-                
                 adv_large = st.number_input(
                     "ADV Large Threshold:", 
                     min_value=100_000, 
@@ -1966,40 +1968,7 @@ def main():
                     step=50_000,
                     help="Minimum average daily volume for large cap stocks"
                 )
-            
             with col2:
-                st.write("**Alpha Threshold**")
-                stock_alpha_threshold = st.number_input(
-                    "5-Day Alpha Threshold:", 
-                    min_value=0.00001, 
-                    max_value=0.01, 
-                    value=float(stock_config.get('alpha_threshold', 0.005)), 
-                    step=0.0001,
-                    format="%.3f",
-                    help="Minimum 5-day alpha return to qualify (as decimal, e.g., 0.005 = 0.005 = 0.5%)",
-                )
-                
-                st.write("**Sector Allocation**")
-                max_sector_weight = st.number_input(
-                    "Maximum Sector Weight (%):", 
-                    min_value=0.01, 
-                    max_value=1.0, 
-                    value=float(stock_config.get('max_sector_weight', 0.30)), 
-                    step=0.01,
-                    format="%.2f",
-                    help="Maximum allocation per sector"
-                )
-                
-                top_sectors_count = st.number_input(
-                    "Top Sectors Count:", 
-                    min_value=1, 
-                    max_value=10, 
-                    value=stock_config.get('top_sectors_count', 3), 
-                    step=1,
-                    help="Number of top sectors to focus on"
-                )
-                
-                st.write("**ADV Small Configuration**")
                 adv_small_length = st.number_input(
                     "ADV Small Length (days):", 
                     min_value=5, 
@@ -2008,7 +1977,6 @@ def main():
                     step=1,
                     help="Number of days for small ADV calculation"
                 )
-                
                 adv_small = st.number_input(
                     "ADV Small Threshold:", 
                     min_value=100_000, 
@@ -2017,8 +1985,12 @@ def main():
                     step=50_000,
                     help="Minimum average daily volume for small cap stocks"
                 )
-                
-                st.write("**RVOL Configuration**")
+            
+            st.markdown("---")
+            # RVOL Configuration
+            st.write("**RVOL Configuration**")
+            col1, col2 = st.columns(2)
+            with col1:
                 rvol_length = st.number_input(
                     "RVOL Length (days):", 
                     min_value=5, 
@@ -2027,7 +1999,7 @@ def main():
                     step=1,
                     help="Number of days for relative volume calculation"
                 )
-                
+            with col2:
                 rvol_filter = st.number_input(
                     "RVOL Filter Threshold:", 
                     min_value=0.5, 
@@ -2037,373 +2009,186 @@ def main():
                     format="%.1f",
                     help="Minimum relative volume multiplier (e.g., 1.3 = 130% of average volume)"
                 )
-        
-        with tab2:
-            st.subheader("Indicators Configuration")
             
-            indicators_config = config.get('INDICATORS', {})
-            checks_config = config.get('ADDITIONAL_CHECKS_CONFIG', {})
-            
-            # VWAP Settings
-            st.write("**VWAP Settings**")
-            vwap_timeframes = st.multiselect(
-                "Timeframes:", 
-                ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                default=indicators_config.get('vwap', {}).get('timeframes', ["3min"]),
-                key="vwap_timeframes"
-            )
-            
-            # EMA Settings
-            st.write("**EMA Settings**")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                ema1_length = st.number_input(
-                    "EMA1 Length:", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=indicators_config.get('ema1', {}).get('params', {}).get('length', 5), 
-                    key="ema1_length"
-                )
-                ema1_timeframes = st.multiselect(
-                    "EMA1 Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('ema1', {}).get('timeframes', ["5min"]),
-                    key="ema1_timeframes"
-                )
-            with col2:
-                ema2_length = st.number_input(
-                    "EMA2 Length:", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=indicators_config.get('ema2', {}).get('params', {}).get('length', 20), 
-                    key="ema2_length"
-                )
-                ema2_timeframes = st.multiselect(
-                    "EMA2 Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('ema2', {}).get('timeframes', ["20min"]),
-                    key="ema2_timeframes"
-                )
-            with col3:
-                st.write("**Current Values:**")
-                st.write(f"EMA1: {ema1_length} periods")
-                st.write(f"EMA2: {ema2_length} periods")
-            
-            # MACD Settings
-            st.write("**MACD Settings**")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                macd_fast = st.number_input(
-                    "Fast Period:", 
-                    min_value=1, 
-                    max_value=50, 
-                    value=indicators_config.get('macd', {}).get('params', {}).get('fast', 12), 
-                    key="macd_fast"
-                )
-            with col2:
-                macd_slow = st.number_input(
-                    "Slow Period:", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=indicators_config.get('macd', {}).get('params', {}).get('slow', 26), 
-                    key="macd_slow"
-                )
-            with col3:
-                macd_signal = st.number_input(
-                    "Signal Period:", 
-                    min_value=1, 
-                    max_value=50, 
-                    value=indicators_config.get('macd', {}).get('params', {}).get('signal', 9), 
-                    key="macd_signal"
-                )
-            with col4:
-                macd_timeframes = st.multiselect(
-                    "Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('macd', {}).get('timeframes', ["3min"]),
-                    key="macd_timeframes"
-                )
-            
-            # ADX Settings
-            st.write("**ADX Settings**")
-            col1, col2 = st.columns(2)
-            with col1:
-                adx_length = st.number_input(
-                    "ADX Length:", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=indicators_config.get('adx', {}).get('params', {}).get('length', 14), 
-                    key="adx_length"
-                )
-            with col2:
-                adx_timeframes = st.multiselect(
-                    "Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('adx', {}).get('timeframes', ["3min"]),
-                    key="adx_timeframes"
-                )
-            
-            # Volume Average Settings
-            st.write("**Volume Average Settings**")
-            col1, col2 = st.columns(2)
-            with col1:
-                volume_window = st.number_input(
-                    "Volume Window:", 
-                    min_value=1, 
-                    max_value=100, 
-                    value=indicators_config.get('volume_avg', {}).get('params', {}).get('window', 20), 
-                    key="volume_window"
-                )
-            with col2:
-                volume_timeframes = st.multiselect(
-                    "Timeframes:", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]),
-                    key="volume_timeframes"
-                )
-            
-            # Additional Checks Configuration
             st.markdown("---")
-            st.write("**Additional Checks Configuration**")
+            # Alpha Threshold
+            st.write("**Alpha Threshold**")
             col1, col2 = st.columns(2)
             with col1:
-                volume_multiplier = st.number_input(
-                    "Volume Multiplier:", 
-                    min_value=1.0, 
-                    max_value=5.0, 
-                    value=checks_config.get('volume_multiplier', 2.0), 
-                    step=0.1, 
-                    key="volume_multiplier"
-                )
-                vwap_slope_threshold = st.number_input(
-                    "VWAP Slope Threshold (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=checks_config.get('vwap_slope_threshold', 0.005), 
-                    step=0.001,
+                stock_alpha_threshold = st.number_input(
+                    "5-Day Alpha Threshold:", 
+                    min_value=0.00001, 
+                    max_value=0.01, 
+                    value=float(stock_config.get('alpha_threshold', 0.005)), 
+                    step=0.0001,
                     format="%.3f",
-                    key="vwap_slope_threshold"
-                )
-            with col2:
-                vwap_slope_period = st.number_input(
-                    "VWAP Slope Period (min):", 
-                    min_value=1, 
-                    max_value=20, 
-                    value=checks_config.get('vwap_slope_period', 3), 
-                    step=1, 
-                    key="vwap_slope_period"
+                    help="Minimum 5-day alpha return to qualify (as decimal, e.g., 0.005 = 0.5%)"
                 )
             
-            # TRIN/TICK Configuration
-            st.markdown("---")
-            st.write("**TRIN/TICK Market Breadth Configuration**")
-            st.markdown("*Applied when Alpha Score < 85*")
-            col1, col2, col3 = st.columns(3)
+            # Sector Allocation
+            st.write("**Sector Allocation**")
+            col1, col2 = st.columns(2)
             with col1:
-                trin_threshold = st.number_input(
-                    "TRIN Threshold:", 
-                    min_value=0.5, 
-                    max_value=2.0, 
-                    value=checks_config.get('trin_threshold', 1.1), 
-                    step=0.1, 
-                    key="trin_threshold",
-                    format="%.1f",
-                    help="Market not overly bearish if TRIN <= threshold"
+                max_sector_weight = st.number_input(
+                    "Maximum Sector Weight (%):", 
+                    min_value=0.01, 
+                    max_value=1.0, 
+                    value=float(stock_config.get('max_sector_weight', 0.30)), 
+                    step=0.01,
+                    format="%.2f",
+                    help="Maximum allocation per sector"
                 )
             with col2:
-                tick_ma_window = st.number_input(
-                    "TICK MA Window (min):", 
+                top_sectors_count = st.number_input(
+                    "Top Sectors Count:", 
                     min_value=1, 
                     max_value=10, 
-                    value=checks_config.get('tick_ma_window', 1), 
-                    step=1, 
-                    key="tick_ma_window",
-                    help="Moving average window for TICK indicator"
+                    value=stock_config.get('top_sectors_count', 3), 
+                    step=1,
+                    help="Number of top sectors to focus on"
                 )
-            with col3:
-                tick_threshold = st.number_input(
-                    "TICK Threshold:", 
-                    min_value=-1000, 
-                    max_value=1000, 
-                    value=checks_config.get('tick_threshold', 0), 
-                    step=50, 
-                    key="tick_threshold",
-                    help="Net uptick buying pressure if TICK MA >= threshold"
-                )
-                    
-        with tab3:
-            st.subheader("Alpha Score Configuration")
+        
+        with tab2:
+            st.subheader("Entry Rules - Alpha Score Configuration")
+            checks_config = config.get('ADDITIONAL_CHECKS_CONFIG', {})
             
+            indicators_config = config.get('INDICATORS', {})
             alpha_config = config.get('ALPHA_SCORE_CONFIG', {})
             
             # Trend Analysis
-            st.write("**Trend Analysis**")
+            st.write("**1. Trend Analysis (30% weight)**")
+            
             col1, col2 = st.columns(2)
             with col1:
-                trend_weight = st.number_input(
-                    "Trend Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('trend', {}).get('weight', 30), 
-                    step=1, 
-                    key="trend_weight"
-                )
+                trend_weight = st.number_input("Trend Weight (%):", 0, 100, alpha_config.get('trend', {}).get('weight', 30), 1, key="trend_weight")            
+            # VWAP Configuration
+            st.write("VWAP Settings")
+            col1, col2 = st.columns(2)
+            with col1:
+                vwap_timeframes = st.multiselect("VWAP Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('vwap', {}).get('timeframes', ["3min"]), key="vwap_timeframes")
             with col2:
-                st.write("**Trend Conditions:**")
-                price_vwap_weight = st.number_input(
-                    "Price vs VWAP Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('trend', {}).get('conditions', {}).get('price_vwap', {}).get('weight', 15), 
-                    step=1, 
-                    key="price_vwap_weight"
-                )
-                ema_cross_weight = st.number_input(
-                    "EMA Cross Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('trend', {}).get('conditions', {}).get('ema_cross', {}).get('weight', 15), 
-                    step=1, 
-                    key="ema_cross_weight"
-                )
+                vwap_below_price = st.checkbox("VWAP Should Be Below Price", value=config.get('VWAP_SHOULD_BE_BELOW_PRICE', True), key="vwap_below_price_global")
+            
+            # EMA Configuration
+            st.write("EMA Settings")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                ema1_length = st.number_input("EMA1 Length (Fast):", 1, 100, indicators_config.get('ema1', {}).get('params', {}).get('length', 5), key="ema1_length")
+                ema1_timeframes = st.multiselect("EMA1 Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('ema1', {}).get('timeframes', ["5min"]), key="ema1_timeframes")
+            with col2:
+                ema2_length = st.number_input("EMA2 Length (Slow):", 1, 100, indicators_config.get('ema2', {}).get('params', {}).get('length', 20), key="ema2_length")
+                ema2_timeframes = st.multiselect("EMA2 Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('ema2', {}).get('timeframes', ["20min"]), key="ema2_timeframes")
+            with col3:
+                ema_cross_weight = st.number_input("EMA Cross Weight (%):", 0, 100, alpha_config.get('trend', {}).get('conditions', {}).get('ema_cross', {}).get('weight', 15), 1, key="ema_cross_weight")
             
             # Momentum Analysis
             st.markdown("---")
-            st.write("**Momentum Analysis**")
-            col1, col2 = st.columns(2)
+            st.write("**2. Momentum Analysis (20% weight)**")
+            
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                momentum_weight = st.number_input(
-                    "Momentum Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('momentum', {}).get('weight', 20), 
-                    step=1, 
-                    key="momentum_weight"
-                )
+                momentum_weight = st.number_input("Momentum Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('weight', 20), 1, key="momentum_weight")
+                macd_positive_weight = st.number_input("MACD > 0 Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('conditions', {}).get('macd_positive', {}).get('weight', 20), 1, key="macd_positive_weight")
             with col2:
-                st.write("**Momentum Conditions:**")
-                macd_positive_weight = st.number_input(
-                    "MACD Positive Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('momentum', {}).get('conditions', {}).get('macd_positive', {}).get('weight', 20), 
-                    step=1, 
-                    key="macd_positive_weight"
-                )
+                macd_fast = st.number_input("MACD Fast Period:", 1, 50, indicators_config.get('macd', {}).get('params', {}).get('fast', 12), key="macd_fast")
+                macd_timeframes = st.multiselect("MACD Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('macd', {}).get('timeframes', ["3min"]), key="macd_timeframes")
+            with col3:
+                macd_slow = st.number_input("MACD Slow Period:", 1, 100, indicators_config.get('macd', {}).get('params', {}).get('slow', 26), key="macd_slow")
+            with col4:
+                macd_signal = st.number_input("MACD Signal Period:", 1, 50, indicators_config.get('macd', {}).get('params', {}).get('signal', 9), key="macd_signal")
+            
+
             
             # Volume/Volatility Analysis
             st.markdown("---")
-            st.write("**Volume/Volatility Analysis**")
+            st.write("**3. Volume/Volatility Analysis (20% weight)**")
+            
             col1, col2, col3 = st.columns(3)
             with col1:
-                volume_weight = st.number_input(
-                    "Volume Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('volume_volatility', {}).get('weight', 20), 
-                    step=1, 
-                    key="volume_weight"
-                )
-                st.write("**Volume Conditions:**")
-                volume_spike_weight = st.number_input(
-                    "Volume Spike Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('weight', 10), 
-                    step=1, 
-                    key="volume_spike_weight"
-                )
+                volume_weight = st.number_input("Volume/Volatility Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('weight', 20), 1, key="volume_weight")
+                volume_spike_weight = st.number_input("Volume Spike Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('weight', 10), 1, key="volume_spike_weight")
+                volume_spike_multiplier = st.number_input("Volume Multiplier:", 0.5, 5.0, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('multiplier', 1.5), 0.1, key="volume_spike_mult")
             with col2:
-                volume_spike_multiplier = st.number_input(
-                    "Volume Spike Multiplier:", 
-                    min_value=0.5, 
-                    max_value=5.0, 
-                    value=alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('multiplier', 1.5), 
-                    step=0.1, 
-                    key="volume_spike_mult"
-                )
-                adx_weight = st.number_input(
-                    "ADX Threshold Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('weight', 10), 
-                    step=1, 
-                    key="adx_weight"
-                )
+                adx_weight = st.number_input("ADX Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('weight', 10), 1, key="adx_weight")
+                adx_threshold = st.number_input("ADX Threshold:", 10, 50, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('threshold', 20), 1, key="adx_threshold")
+                adx_length = st.number_input("ADX Length:", 1, 100, indicators_config.get('adx', {}).get('params', {}).get('length', 14), key="adx_length")
             with col3:
-                adx_threshold = st.number_input(
-                    "ADX Threshold:", 
-                    min_value=10, 
-                    max_value=50, 
-                    value=alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('threshold', 20), 
-                    step=1, 
-                    key="adx_threshold"
-                )
+                volume_window = st.number_input("Volume Window:", 1, 100, indicators_config.get('volume_avg', {}).get('params', {}).get('window', 20), key="volume_window")
+                adx_timeframes = st.multiselect("ADX Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('adx', {}).get('timeframes', ["3min"]), key="adx_timeframes")
+                volume_timeframes = st.multiselect("Volume Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
+                    default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]), key="volume_timeframes")
             
             # News Analysis
             st.markdown("---")
-            st.write("**News Analysis**")
+            st.write("**4. News Analysis (15% weight)**")       
+            
             col1, col2 = st.columns(2)
             with col1:
-                news_weight = st.number_input(
-                    "News Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('news', {}).get('weight', 15), 
-                    step=1, 
-                    key="news_weight"
-                )
+                news_weight = st.number_input("News Weight (%):", 0, 100, alpha_config.get('news', {}).get('weight', 15), 1, key="news_weight")
             with col2:
-                st.write("**News Conditions:**")
-                no_major_news_weight = st.number_input(
-                    "No Major News Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('news', {}).get('conditions', {}).get('no_major_news', {}).get('weight', 15), 
-                    step=1, 
-                    key="no_major_news_weight"
-                )
+                no_major_news_weight = st.number_input("No Major News Weight (%):", 0, 100, alpha_config.get('news', {}).get('conditions', {}).get('no_major_news', {}).get('weight', 15), 1, key="no_major_news_weight")
             
             # Market Calm Analysis
             st.markdown("---")
-            st.write("**Market Calm Analysis**")
-            col1, col2 = st.columns(2)
-            with col1:
-                market_calm_weight = st.number_input(
-                    "Market Calm Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('market_calm', {}).get('weight', 15), 
-                    step=1, 
-                    key="market_calm_weight"
-                )
-            with col2:
-                st.write("**Market Calm Conditions:**")
-                vix_threshold = st.number_input(
-                    "VIX Threshold:", 
-                    min_value=10, 
-                    max_value=50, 
-                    value=alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 
-                    step=1, 
-                    key="alpha_vix_threshold"
-                )
-                vix_threshold_weight = st.number_input(
-                    "VIX Threshold Weight (%):", 
-                    min_value=0, 
-                    max_value=100, 
-                    value=alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('weight', 15), 
-                    step=1, 
-                    key="vix_threshold_weight"
-                )
+            st.write("**5. Market Calm Analysis (15% weight)**")
             
-            # Total weight validation
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                market_calm_weight = st.number_input("Market Calm Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('weight', 15), 1, key="market_calm_weight")
+            with col2:
+                vix_threshold = st.number_input("VIX Threshold:", 10, 50, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 1, key="alpha_vix_threshold")
+            with col3:
+                vix_threshold_weight = st.number_input("VIX Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('weight', 15), 1, key="vix_threshold_weight")
+            
+            # Additional Entry Checks
+            st.markdown("---")
+            st.write("**Additional Entry Checks**")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                volume_multiplier = st.number_input("Volume Multiplier (xAvg):", 1.0, 5.0, checks_config.get('volume_multiplier', 2.0), 0.1, key="volume_multiplier")
+            with col2:
+                vwap_slope_threshold = st.number_input("VWAP Slope Threshold:", 0.001, 1.0, checks_config.get('vwap_slope_threshold', 0.005), 0.001, format="%.3f", key="vwap_slope_threshold")
+            with col3:
+                vwap_slope_period = st.number_input("VWAP Slope Period (min):", 1, 20, checks_config.get('vwap_slope_period', 3), 1, key="vwap_slope_period")
+            
+            # TRIN/TICK Market Breadth Checks
+            st.markdown("---")
+            st.write("**TRIN/TICK Market Breadth Checks**")
+            bypass_alpha = checks_config.get('trin_tick_bypass_alpha', 85)
+            
+            # Enable/Disable checkbox
+            trin_tick_check_enabled = st.checkbox("Enable TRIN/TICK Check", value=checks_config.get('trin_tick_check_enabled', True), 
+                key="trin_tick_check_enabled")
+                     
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                trin_tick_bypass_alpha = st.number_input("Bypass Alpha Score:", 0, 100, bypass_alpha, 1, key="trin_tick_bypass_alpha",
+                    help="Alpha score threshold to bypass TRIN/TICK checks", disabled=not trin_tick_check_enabled)
+            with col2:
+                trin_threshold = st.number_input("TRIN Threshold:", 0.5, 2.0, checks_config.get('trin_threshold', 1.1), 0.1, format="%.1f", key="trin_threshold", 
+                    help="Market not overly bearish if TRIN ≤ threshold", disabled=not trin_tick_check_enabled)
+            with col3:
+                tick_ma_window = st.number_input("TICK MA Window (min):", 1, 10, checks_config.get('tick_ma_window', 1), 1, key="tick_ma_window",
+                    help="Moving average window for TICK indicator", disabled=not trin_tick_check_enabled)
+            with col4:
+                tick_threshold = st.number_input("TICK Threshold:", -1000, 1000, checks_config.get('tick_threshold', 0), 50, key="tick_threshold",
+                    help="Net uptick buying pressure if TICK MA ≥ threshold", disabled=not trin_tick_check_enabled)
+            
+            # Weight Validation
+            st.markdown("---")
             total_weight = trend_weight + momentum_weight + volume_weight + news_weight + market_calm_weight
             if total_weight != 100:
-                st.warning(f"Total weight is {total_weight}% (should be 100%)")
+                st.error(f"Total weight is {total_weight}% (should be 100%)")
             else:
                 st.success(f"Total weight: {total_weight}%")
         
-        with tab4:
+        with tab3:
             st.subheader("Risk Management Configuration")
             
             risk_config = config.get('RISK_CONFIG', {})
@@ -2480,7 +2265,7 @@ def main():
             # Dynamic Drawdown Limits
             st.markdown("---")
             st.write("**Dynamic Daily Limit Configuration**")
-            st.markdown("*Dynamic limit = min(lower_limit, 1.5 × Portfolio ATR14, upper_limit)*")
+            st.markdown("*Dynamic limit = min(lower_limit, 1.5 x Portfolio ATR14, upper_limit)*")
             col1, col2 = st.columns(2)
             with col1:
                 lower_limit = st.number_input(
@@ -2541,7 +2326,7 @@ def main():
                     key="order_window"
                 )
                             
-        with tab5:
+        with tab4:
             st.subheader("Stop Loss & Profit Configuration")
             
             stop_loss_config = config.get('STOP_LOSS_CONFIG', {})
@@ -2739,7 +2524,7 @@ def main():
                     key="monitor_period"
                 )
      
-        with tab6:
+        with tab5:
             st.subheader("Hedge & Leverage Configuration")
             
             hedge_config = config.get('HEDGE_CONFIG', {})
@@ -2843,11 +2628,6 @@ def main():
                     key="early_beta",
                     format="%.2f"
                 )
-                early_description = st.text_input(
-                    "Early Description:", 
-                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('description', 'Early hedge: Single risk indicator triggered'), 
-                    key="early_description"
-                )
             with col2:
                 st.write("**Mild Hedge**")
                 mild_beta = st.number_input(
@@ -2858,11 +2638,6 @@ def main():
                     step=0.01, 
                     key="mild_beta",
                     format="%.2f"
-                )
-                mild_description = st.text_input(
-                    "Mild Description:", 
-                    value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('description', 'Mild hedge: VIX elevated but market stable'), 
-                    key="mild_description"
                 )
             with col3:
                 st.write("**Severe Hedge**")
@@ -2875,111 +2650,106 @@ def main():
                     key="severe_beta",
                     format="%.2f"
                 )
-                severe_description = st.text_input(
-                    "Severe Description:", 
-                    value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('description', 'Severe hedge: Multiple risk indicators triggered'), 
-                    key="severe_description"
-                )
             
-            # Leverage Configuration
-            st.markdown("---")
-            st.write("**Leverage Settings**")
-            col1, col2 = st.columns(2)
-            with col1:
-                leverage_enabled = st.checkbox(
-                    "Leverage Enabled", 
-                    value=leverage_config.get('enabled', True), 
-                    key="leverage_enabled"
-                )
-                max_leverage = st.number_input(
-                    "Max Leverage:", 
-                    min_value=1.0, 
-                    max_value=5.0, 
-                    value=leverage_config.get('max_leverage', 2.0), 
-                    step=0.1, 
-                    key="max_leverage",
-                    format="%.1f"
-                )
-                alpha_score_min = st.number_input(
-                    "Alpha Score Min:", 
-                    min_value=70, 
-                    max_value=100, 
-                    value=leverage_config.get('conditions', {}).get('alpha_score_min', 85), 
-                    step=1, 
-                    key="alpha_score_min"
-                )
-                vix_max = st.number_input(
-                    "VIX Max:", 
-                    min_value=10, 
-                    max_value=30, 
-                    value=leverage_config.get('conditions', {}).get('vix_max', 18), 
-                    step=1, 
-                    key="vix_max"
-                )
-            with col2:
-                drawdown_max = st.number_input(
-                    "Drawdown Max (%):", 
-                    min_value=0.001, 
-                    max_value=0.10, 
-                    value=leverage_config.get('conditions', {}).get('drawdown_max', 0.005), 
-                    step=0.001, 
-                    key="drawdown_max",
-                    format="%.3f"
-                )
-                vix_trend_days = st.number_input(
-                    "VIX Trend Days:", 
-                    min_value=5, 
-                    max_value=20, 
-                    value=leverage_config.get('conditions', {}).get('vix_trend_days', 10), 
-                    step=1, 
-                    key="vix_trend_days"
-                )
-                margin_alert_threshold = st.number_input(
-                    "Margin Alert Threshold:", 
-                    min_value=1.0, 
-                    max_value=3.0, 
-                    value=leverage_config.get('margin_alert_threshold', 1.5), 
-                    step=0.1, 
-                    key="margin_alert_threshold",
-                    format="%.1f"
-                )
+            # # Leverage Configuration
+            # st.markdown("---")
+            # st.write("**Leverage Settings**")
+            # col1, col2 = st.columns(2)
+            # with col1:
+            #     leverage_enabled = st.checkbox(
+            #         "Leverage Enabled", 
+            #         value=leverage_config.get('enabled', True), 
+            #         key="leverage_enabled"
+            #     )
+            #     max_leverage = st.number_input(
+            #         "Max Leverage:", 
+            #         min_value=1.0, 
+            #         max_value=5.0, 
+            #         value=leverage_config.get('max_leverage', 2.0), 
+            #         step=0.1, 
+            #         key="max_leverage",
+            #         format="%.1f"
+            #     )
+            #     alpha_score_min = st.number_input(
+            #         "Alpha Score Min:", 
+            #         min_value=70, 
+            #         max_value=100, 
+            #         value=leverage_config.get('conditions', {}).get('alpha_score_min', 85), 
+            #         step=1, 
+            #         key="alpha_score_min"
+            #     )
+            #     vix_max = st.number_input(
+            #         "VIX Max:", 
+            #         min_value=10, 
+            #         max_value=30, 
+            #         value=leverage_config.get('conditions', {}).get('vix_max', 18), 
+            #         step=1, 
+            #         key="vix_max"
+            #     )
+            # with col2:
+            #     drawdown_max = st.number_input(
+            #         "Drawdown Max (%):", 
+            #         min_value=0.001, 
+            #         max_value=0.10, 
+            #         value=leverage_config.get('conditions', {}).get('drawdown_max', 0.005), 
+            #         step=0.001, 
+            #         key="drawdown_max",
+            #         format="%.3f"
+            #     )
+            #     vix_trend_days = st.number_input(
+            #         "VIX Trend Days:", 
+            #         min_value=5, 
+            #         max_value=20, 
+            #         value=leverage_config.get('conditions', {}).get('vix_trend_days', 10), 
+            #         step=1, 
+            #         key="vix_trend_days"
+            #     )
+            #     margin_alert_threshold = st.number_input(
+            #         "Margin Alert Threshold:", 
+            #         min_value=1.0, 
+            #         max_value=3.0, 
+            #         value=leverage_config.get('margin_alert_threshold', 1.5), 
+            #         step=0.1, 
+            #         key="margin_alert_threshold",
+            #         format="%.1f"
+            #     )
             
-            # Leverage Levels
-            st.markdown("---")
-            st.write("**Leverage Levels**")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                all_conditions_leverage = st.number_input(
-                    "All Conditions Met:", 
-                    min_value=1.0, 
-                    max_value=5.0, 
-                    value=leverage_config.get('leverage_levels', {}).get('all_conditions_met', 2.0), 
-                    step=0.1, 
-                    key="all_conditions_leverage",
-                    format="%.1f"
-                )
-            with col2:
-                partial_conditions_leverage = st.number_input(
-                    "Partial Conditions:", 
-                    min_value=1.0, 
-                    max_value=3.0, 
-                    value=leverage_config.get('leverage_levels', {}).get('partial_conditions', 1.2), 
-                    step=0.1, 
-                    key="partial_conditions_leverage",
-                    format="%.1f"
-                )
-            with col3:
-                default_leverage = st.number_input(
-                    "Default Leverage:", 
-                    min_value=1.0, 
-                    max_value=2.0, 
-                    value=leverage_config.get('leverage_levels', {}).get('default', 1.0), 
-                    step=0.1, 
-                    key="default_leverage",
-                    format="%.1f"
-                )
+            # # Leverage Levels
+            # st.markdown("---")
+            # st.write("**Leverage Levels**")
+            # col1, col2, col3 = st.columns(3)
+            # with col1:
+            #     all_conditions_leverage = st.number_input(
+            #         "All Conditions Met:", 
+            #         min_value=1.0, 
+            #         max_value=5.0, 
+            #         value=leverage_config.get('leverage_levels', {}).get('all_conditions_met', 2.0), 
+            #         step=0.1, 
+            #         key="all_conditions_leverage",
+            #         format="%.1f"
+            #     )
+            # with col2:
+            #     partial_conditions_leverage = st.number_input(
+            #         "Partial Conditions:", 
+            #         min_value=1.0, 
+            #         max_value=3.0, 
+            #         value=leverage_config.get('leverage_levels', {}).get('partial_conditions', 1.2), 
+            #         step=0.1, 
+            #         key="partial_conditions_leverage",
+            #         format="%.1f"
+            #     )
+            # with col3:
+            #     default_leverage = st.number_input(
+            #         "Default Leverage:", 
+            #         min_value=1.0, 
+            #         max_value=2.0, 
+            #         value=leverage_config.get('leverage_levels', {}).get('default', 1.0), 
+            #         step=0.1, 
+            #         key="default_leverage",
+            #         format="%.1f"
+            #     )
 
-        with tab7:
+        with tab6:
             st.subheader("Trading Hours Configuration")
             
             trading_hours_config = config.get('TRADING_HOURS', {})
@@ -3069,8 +2839,8 @@ def main():
         
         # Basic Configuration Section
         st.write("**Basic Configuration**")
-        col1, col2 = st.columns(2)
         
+        col1, col2 = st.columns(2)
         with col1:
             equity = st.number_input(
                 "Trading Equity ($):", 
@@ -3080,18 +2850,11 @@ def main():
                 step=10000,
                 key="equity_global"
             )
-            
+        with col2:
             testing = st.checkbox(
                 "Testing Mode Enabled", 
                 value=config.get('TESTING', False),
                 key="testing_global"
-            )
-        
-        with col2:
-            vwap_below_price = st.checkbox(
-                "VWAP Should Be Below Price", 
-                value=config.get('VWAP_SHOULD_BE_BELOW_PRICE', True),
-                key="vwap_below_price_global"
             )
         
         if st.button("Save All Configuration", type="primary", key="save_all_config"):
@@ -3125,12 +2888,14 @@ def main():
                     "volume_multiplier": volume_multiplier,
                     "vwap_slope_threshold": vwap_slope_threshold,
                     "vwap_slope_period": vwap_slope_period,
+                    "trin_tick_check_enabled": trin_tick_check_enabled,
+                    "trin_tick_bypass_alpha": trin_tick_bypass_alpha,
                     "trin_threshold": trin_threshold,
                     "tick_ma_window": tick_ma_window,
                     "tick_threshold": tick_threshold
                 },
                 "ALPHA_SCORE_CONFIG": {
-                    "trend": {"weight": trend_weight, "conditions": {"price_vwap": {"weight": price_vwap_weight}, "ema_cross": {"weight": ema_cross_weight}}},
+                    "trend": {"weight": trend_weight, "conditions": {"ema_cross": {"weight": ema_cross_weight}}},
                     "momentum": {"weight": momentum_weight, "conditions": {"macd_positive": {"weight": macd_positive_weight}}},
                     "volume_volatility": {"weight": volume_weight, "conditions": {"volume_spike": {"weight": volume_spike_weight, "multiplier": volume_spike_multiplier}, "adx_threshold": {"weight": adx_weight, "threshold": adx_threshold}}},
                     "news": {"weight": news_weight, "conditions": {"no_major_news": {"weight": no_major_news_weight}}},
@@ -3182,35 +2947,35 @@ def main():
                         "qqq_vwap_consecutive_bars": qqq_vwap_consecutive_bars
                     },
                     "hedge_levels": {
-                        "early": {"beta": early_beta, "description": early_description},
-                        "mild": {"beta": mild_beta, "description": mild_description},
-                        "severe": {"beta": severe_beta, "description": severe_description}
+                        "early": {"beta": early_beta},
+                        "mild": {"beta": mild_beta},
+                        "severe": {"beta": severe_beta}
                     }
                 },
-                "LEVERAGE_CONFIG": {
-                    "enabled": leverage_enabled,
-                    "max_leverage": max_leverage,
-                    "conditions": {"alpha_score_min": alpha_score_min, "vix_max": vix_max, "drawdown_max": drawdown_max, "vix_trend_days": vix_trend_days},
-                    "leverage_levels": {"all_conditions_met": all_conditions_leverage, "partial_conditions": partial_conditions_leverage, "default": default_leverage},
-                    "margin_alert_threshold": margin_alert_threshold
-                },
-                "ORDER_CONFIG": {
-                    "limit_offset_min": limit_offset_min,
-                    "limit_offset_max": limit_offset_max,
-                    "order_window": order_window
-                },
-                "TRADING_HOURS": {
-                    "market_open": market_open.strftime("%H:%M"),
-                    "market_close": market_close.strftime("%H:%M"),
-                    "timezone": timezone,
-                    "morning_entry_start": morning_start.strftime("%H:%M"),
-                    "morning_entry_end": morning_end.strftime("%H:%M"),
-                    "afternoon_entry_start": afternoon_start.strftime("%H:%M"),
-                    "afternoon_entry_end": afternoon_end.strftime("%H:%M"),
-                    "weak_exit_time": weak_exit_time.strftime("%H:%M"),
-                    "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
-                    "safety_exit_time": safety_exit_time.strftime("%H:%M")
-                }
+                # "LEVERAGE_CONFIG": {
+                #     "enabled": leverage_enabled,
+                #     "max_leverage": max_leverage,
+                #     "conditions": {"alpha_score_min": alpha_score_min, "vix_max": vix_max, "drawdown_max": drawdown_max, "vix_trend_days": vix_trend_days},
+                #     "leverage_levels": {"all_conditions_met": all_conditions_leverage, "partial_conditions": partial_conditions_leverage, "default": default_leverage},
+                #     "margin_alert_threshold": margin_alert_threshold
+                # },
+                # "ORDER_CONFIG": {
+                #     "limit_offset_min": limit_offset_min,
+                #     "limit_offset_max": limit_offset_max,
+                #     "order_window": order_window
+                # },
+                # "TRADING_HOURS": {
+                #     "market_open": market_open.strftime("%H:%M"),
+                #     "market_close": market_close.strftime("%H:%M"),
+                #     "timezone": timezone,
+                #     "morning_entry_start": morning_start.strftime("%H:%M"),
+                #     "morning_entry_end": morning_end.strftime("%H:%M"),
+                #     "afternoon_entry_start": afternoon_start.strftime("%H:%M"),
+                #     "afternoon_entry_end": afternoon_end.strftime("%H:%M"),
+                #     "weak_exit_time": weak_exit_time.strftime("%H:%M"),
+                #     "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
+                #     "safety_exit_time": safety_exit_time.strftime("%H:%M")
+                # }
             }
             
             success, message = save_config(new_config)

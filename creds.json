@@ -67,8 +67,10 @@
     },
     "ADDITIONAL_CHECKS_CONFIG": {
         "volume_multiplier": 2.0,
-        "vwap_slope_threshold": 0.001,
+        "vwap_slope_threshold": 0.005,
         "vwap_slope_period": 3,
+        "trin_tick_check_enabled": true,
+        "trin_tick_bypass_alpha": 85,
         "trin_threshold": 1.1,
         "tick_ma_window": 1,
         "tick_threshold": 0
@@ -77,9 +79,6 @@
         "trend": {
             "weight": 30,
             "conditions": {
-                "price_vwap": {
-                    "weight": 15
-                },
                 "ema_cross": {
                     "weight": 15
                 }
@@ -174,7 +173,7 @@
         }
     },
     "HEDGE_CONFIG": {
-        "enabled": false,
+        "enabled": true,
         "hedge_symbol": "SQQQ",
         "hedge_options": [
             "SQQQ",

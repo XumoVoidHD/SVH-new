@@ -951,14 +951,15 @@ class Strategy:
             vwap_slope_check = self._check_vwap_slope()
             
             # Alpha Score based TRIN/TICK check
-            # If Alpha Score >= 85 → enter without TRIN/TICK check
-            # If Alpha Score < 85 → require both TRIN <= 1.1 and TICK 1-min MA >= 0
-            if self.score >= 85:
+            # If Alpha Score >= bypass_threshold → enter without TRIN/TICK check
+            # If base_threshold <= Alpha Score < bypass_threshold → require both TRIN <= threshold and TICK MA >= threshold
+            bypass_alpha = self.additional_checks_config.trin_tick_bypass_alpha
+            if self.score >= bypass_alpha:
                 market_conditions_check = True
-                print(f"Alpha Score >= 85 ({self.score}) - Bypassing TRIN/TICK check")
+                print(f"Alpha Score >= {bypass_alpha} ({self.score}) - Bypassing TRIN/TICK check")
             else:
                 market_conditions_check = self._check_trin_tick_conditions()
-                print(f"Alpha Score < 85 ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
+                print(f"Alpha Score < {bypass_alpha} ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
             
             self.additional_checks_passed = bool(volume_check and vwap_slope_check and market_conditions_check)
             
@@ -987,6 +988,11 @@ class Strategy:
     
     def _check_trin_tick_conditions(self):
         """Check TRIN and TICK market breadth conditions"""
+        # If TRIN/TICK check is disabled in config, bypass the check
+        if not self.additional_checks_config.trin_tick_check_enabled:
+            print("TRIN/TICK check disabled in configuration - bypassing")
+            return True
+        
         try:
             # Get configurable thresholds
             trin_threshold = self.additional_checks_config.trin_threshold
@@ -1212,6 +1218,7 @@ class Strategy:
             # Get exit times from configuration
             weak_exit_time = self.time_str_to_datetime(self.trading_hours.weak_exit_time)
             safety_exit_time = self.time_str_to_datetime(self.trading_hours.safety_exit_time)
+            market_close_time = self.time_str_to_datetime(self.trading_hours.market_close)
 
             if current_time >= weak_exit_time and current_time < safety_exit_time:
                 self.end_of_day_weak_exit()
@@ -1221,10 +1228,10 @@ class Strategy:
                 self.safety_exit_all()
                 break
                         
-            # # 4:00 PM - Market-on-close for any remaining positions
-            # elif current_time_str >= self.trading_hours.market_close:
-            #     self.market_on_close_exit()
-            #     break  # End trading for the day
+            # 4:00 PM - Market-on-close for any remaining positions
+            elif current_time >= market_close_time:
+                # self.market_on_close_exit()
+                break  # End trading for the day
 
             if not TESTING:            
                 # Check if we're in entry time windows
@@ -1904,7 +1911,7 @@ class StrategyManager:
         
         # Start drawdown monitoring thread AFTER everything is initialized
         drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
-        # drawdown_thread.start()
+        drawdown_thread.start()
     
     def calculate_portfolio_atr14(self):
         try:
