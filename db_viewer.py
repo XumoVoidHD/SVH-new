@@ -3122,23 +3122,23 @@ def main():
                 #     "leverage_levels": {"all_conditions_met": all_conditions_leverage, "partial_conditions": partial_conditions_leverage, "default": default_leverage},
                 #     "margin_alert_threshold": margin_alert_threshold
                 # },
-                # "ORDER_CONFIG": {
-                #     "limit_offset_min": limit_offset_min,
-                #     "limit_offset_max": limit_offset_max,
-                #     "order_window": order_window
-                # },
-                # "TRADING_HOURS": {
-                #     "market_open": market_open.strftime("%H:%M"),
-                #     "market_close": market_close.strftime("%H:%M"),
-                #     "timezone": timezone,
-                #     "morning_entry_start": morning_start.strftime("%H:%M"),
-                #     "morning_entry_end": morning_end.strftime("%H:%M"),
-                #     "afternoon_entry_start": afternoon_start.strftime("%H:%M"),
-                #     "afternoon_entry_end": afternoon_end.strftime("%H:%M"),
-                #     "weak_exit_time": weak_exit_time.strftime("%H:%M"),
-                #     "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
-                #     "safety_exit_time": safety_exit_time.strftime("%H:%M")
-                # },
+                "ORDER_CONFIG": {
+                    "limit_offset_min": limit_offset_min,
+                    "limit_offset_max": limit_offset_max,
+                    "order_window": order_window
+                },
+                "TRADING_HOURS": {
+                    "market_open": market_open.strftime("%H:%M"),
+                    "market_close": market_close.strftime("%H:%M"),
+                    "timezone": timezone,
+                    "morning_entry_start": morning_start.strftime("%H:%M"),
+                    "morning_entry_end": morning_end.strftime("%H:%M"),
+                    "afternoon_entry_start": afternoon_start.strftime("%H:%M"),
+                    "afternoon_entry_end": afternoon_end.strftime("%H:%M"),
+                    "weak_exit_time": weak_exit_time.strftime("%H:%M"),
+                    "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
+                    "safety_exit_time": safety_exit_time.strftime("%H:%M")
+                },
                 "WEAK_POSITION_CONFIG": {
                     "min_gain_pct": weak_min_gain,
                     "max_gain_pct": weak_max_gain
