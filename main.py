@@ -57,6 +57,7 @@ class Strategy:
         self.trading_hours = creds.TRADING_HOURS
         self.hedge_config = creds.HEDGE_CONFIG
         self.leverage_config = creds.LEVERAGE_CONFIG
+        self.weak_position_config = creds.WEAK_POSITION_CONFIG
         
         self.data = {}
         self.indicators = {}
@@ -235,7 +236,8 @@ class Strategy:
         
         try:
             # Check VIX trigger
-            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
+            vix_timeframe = self.hedge_config.triggers.vix_timeframe
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe)
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 if current_vix > self.hedge_config.triggers.vix_threshold:
@@ -392,7 +394,8 @@ class Strategy:
                 condition_details.append(f"Alpha {self.score} < 85")
             
             # 2. Check VIX < 18 and falling
-            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size="1 day", duration="30 D")
+            vix_timeframe = self.leverage_config.conditions.vix_timeframe
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe, duration="30 D")
             if not vix_data.empty and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 
@@ -485,7 +488,7 @@ class Strategy:
             self.hedge_shares = hedge_shares
             self.hedge_level = hedge_level
             
-            # Update database with hedge information
+            # Update database with hedge information for the individual stock
             trades_db.update_strategy_data(self.stock,
                 hedge_active=True,
                 hedge_shares=hedge_shares,
@@ -494,6 +497,17 @@ class Strategy:
                 hedge_beta=beta,
                 hedge_entry_price=trade[1],
                 hedge_entry_time=datetime.now(pytz.timezone('US/Eastern'))
+            )
+            
+            # Update the centralized hedge symbol position
+            current_hedge_shares = trades_db.get_position_shares(self.hedge_symbol)
+            trades_db.update_strategy_data(self.hedge_symbol,
+                position_active=True,
+                position_shares=current_hedge_shares + hedge_shares,
+                entry_price=trade[1],  # Current price becomes the entry price for this addition
+                current_price=trade[1],
+                unrealized_pnl=0,  # Will be calculated in monitoring
+                entry_time=datetime.now(pytz.timezone('US/Eastern'))
             )
             
             print(f"Hedge executed: Buy {hedge_shares} shares of {self.hedge_symbol}")
@@ -512,13 +526,14 @@ class Strategy:
         signal_details = []
         
         try:
-            # Check VIX < 20 and falling (10-min slope negative)
-            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
+            # Check VIX < 20 and falling (configurable timeframe slope negative)
+            vix_timeframe = self.hedge_config.exit_conditions.vix_timeframe
+            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe)
             if not vix_data.empty and len(vix_data) >= 4 and 'close' in vix_data.columns:
                 current_vix = vix_data['close'].iloc[-1]
                 vix_slope_period = self.hedge_config.exit_conditions.vix_slope_period
                 vix_exit_threshold = self.hedge_config.exit_conditions.vix_exit_threshold
-                vix_10min_ago = vix_data['close'].iloc[-4]  # ~10 minutes ago (3min bars)
+                vix_10min_ago = vix_data['close'].iloc[-4]  # ~10 minutes ago (configurable bars)
                 
                 if current_vix < vix_exit_threshold and current_vix < vix_10min_ago:
                     recovery_signals += 1
@@ -669,7 +684,7 @@ class Strategy:
             self.hedge_active = False
             self.hedge_shares = 0
             
-            # Update database with hedge closure
+            # Update database with hedge closure for individual stock
             trades_db.update_strategy_data(self.stock,
                 hedge_active=False,
                 hedge_shares=0,
@@ -677,6 +692,29 @@ class Strategy:
                 hedge_exit_time=datetime.now(pytz.timezone('US/Eastern')),
                 hedge_pnl=hedge_pnl
             )
+            
+            # Update the centralized hedge symbol position
+            current_hedge_shares = trades_db.get_position_shares(self.hedge_symbol)
+            current_realized_pnl = trades_db.get_realized_pnl(self.hedge_symbol)
+            remaining_hedge_shares = max(0, current_hedge_shares - self.hedge_shares)
+            
+            if remaining_hedge_shares > 0:
+                # Partial closure - update shares and calculate realized PnL
+                trades_db.update_strategy_data(self.hedge_symbol,
+                    position_shares=remaining_hedge_shares,
+                    realized_pnl=current_realized_pnl + hedge_pnl,
+                    current_price=current_hedge_price
+                )
+            else:
+                # Full closure - close the position
+                trades_db.update_strategy_data(self.hedge_symbol,
+                    position_active=False,
+                    position_shares=0,
+                    realized_pnl=current_realized_pnl + hedge_pnl,
+                    unrealized_pnl=0,
+                    current_price=current_hedge_price,
+                    close_time=datetime.now(pytz.timezone('US/Eastern'))
+                )
             
             print(f"Hedge closed successfully")
             print(f"Hedge P&L: ${hedge_pnl:.2f}")
@@ -687,21 +725,27 @@ class Strategy:
             traceback.print_exc()
     
     def end_of_day_weak_exit(self):
-        """Exit weak positions at configured weak exit time (-0.3% to +1.2%)"""
+        """Exit weak positions at configured weak exit time (configurable gain range)"""
         if not self.position_active:
             return
         
         current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
         
-        # Exit if position is weak (-0.3% to +1.2%)
-        if -0.003 <= current_gain_pct <= 0.012:
+        # Exit if position is weak (configurable range)
+        if self.weak_position_config.min_gain_pct <= current_gain_pct <= self.weak_position_config.max_gain_pct:
             weak_exit_time = self.trading_hours.weak_exit_time
             print(f"{weak_exit_time} Weak Exit: {current_gain_pct*100:.1f}% gain in weak range")
             self.close_position('end_of_day_weak', self.position_shares)
+
+            if self.hedge_active:
+                hedge_exit_time = self.trading_hours.hedge_force_exit_time
+                print(f"{hedge_exit_time} Weak Exit: Closing hedge positions")
+                self.close_hedge()
         else:
             weak_exit_time = self.trading_hours.weak_exit_time
             print(f"{weak_exit_time}: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
-    
+
+
     def safety_exit_all(self):
         # Get exit time from configuration
         safety_exit_time = self.trading_hours.safety_exit_time
@@ -921,7 +965,8 @@ class Strategy:
     def _check_market_calm_conditions(self):
         """Check market calm conditions (VIX)"""
         try:
-            vix_df = self.get_historical_data_with_retry(stock="VIXY", bar_size=3)
+            vix_timeframe = self.alpha_score_config.market_calm.conditions.vix_threshold.timeframe
+            vix_df = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe)
             if vix_df.empty:
                 return False
             
@@ -1290,6 +1335,8 @@ class Strategy:
             
             if self.hedge_active:
                 self.scale_down_hedge()
+                # Update hedge position unrealized PnL
+                self.update_hedge_position_unrealized_pnl()
 
             if self.manager.stop_event.is_set():
                 self.close_position('drawdown')
@@ -1312,6 +1359,34 @@ class Strategy:
             
         except Exception as e:
             print(f"Error monitoring position for {self.stock}: {e}")
+
+    def update_hedge_position_unrealized_pnl(self):
+        """Update unrealized PnL for the centralized hedge position"""
+        try:
+            if not self.hedge_active or self.hedge_shares == 0:
+                return
+            
+            # Get current hedge price
+            current_hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
+            if current_hedge_price is None:
+                return
+            
+            # Get current hedge position data and update
+            hedge_position_shares = trades_db.get_position_shares(self.hedge_symbol)
+            hedge_entry_price = trades_db.get_entry_price(self.hedge_symbol)
+            
+            if hedge_position_shares > 0 and hedge_entry_price > 0:
+                # Calculate unrealized PnL for the hedge position
+                hedge_unrealized_pnl = (current_hedge_price - hedge_entry_price) * hedge_position_shares
+                
+                # Update the hedge position with current price and unrealized PnL
+                trades_db.update_strategy_data(self.hedge_symbol,
+                    current_price=current_hedge_price,
+                    unrealized_pnl=hedge_unrealized_pnl
+                )
+                
+        except Exception as e:
+            print(f"Error updating hedge position unrealized PnL: {e}")
 
     def check_take_profit(self):
         current_gain_pct = (self.current_price - self.entry_price) / self.entry_price

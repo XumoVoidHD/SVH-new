@@ -118,7 +118,8 @@
             "conditions": {
                 "vix_threshold": {
                     "weight": 15,
-                    "threshold": 22
+                    "threshold": 22,
+                    "timeframe": "3min"
                 }
             }
         }
@@ -182,13 +183,15 @@
         ],
         "triggers": {
             "vix_threshold": 22,
-            "sp500_drop_threshold": 0.012
+            "sp500_drop_threshold": 0.012,
+            "vix_timeframe": "3min"
         },
         "exit_conditions": {
             "vix_exit_threshold": 20,
             "vix_slope_period": 10,
             "sp500_recovery_threshold": 0.006,
-            "sqqq_vwap_consecutive_bars": 2
+            "sqqq_vwap_consecutive_bars": 2,
+            "vix_timeframe": "3min"
         },
         "hedge_levels": {
             "early": {
@@ -212,7 +215,8 @@
             "alpha_score_min": 85,
             "vix_max": 18,
             "drawdown_max": 0.005,
-            "vix_trend_days": 10
+            "vix_trend_days": 10,
+            "vix_timeframe": "1 day"
         },
         "leverage_levels": {
             "all_conditions_met": 2.0,
@@ -237,5 +241,9 @@
         "weak_exit_time": "15:30",
         "hedge_force_exit_time": "15:55",
         "safety_exit_time": "15:55"
+    },
+    "WEAK_POSITION_CONFIG": {
+        "min_gain_pct": -0.003,
+        "max_gain_pct": 0.012
     }
 }

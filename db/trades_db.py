@@ -570,6 +570,48 @@ class TradesDatabase:
                 return []
             finally:
                 conn.close()
+    
+    def get_position_shares(self, symbol):
+        """Get current position shares for a symbol"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT position_shares FROM stock_strategies WHERE symbol = ?", (symbol,))
+                result = cursor.fetchone()
+                conn.close()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            print(f"Error getting position shares for {symbol}: {e}")
+            return 0
+    
+    def get_realized_pnl(self, symbol):
+        """Get current realized PnL for a symbol"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT realized_pnl FROM stock_strategies WHERE symbol = ?", (symbol,))
+                result = cursor.fetchone()
+                conn.close()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            print(f"Error getting realized PnL for {symbol}: {e}")
+            return 0
+    
+    def get_entry_price(self, symbol):
+        """Get entry price for a symbol"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT entry_price FROM stock_strategies WHERE symbol = ?", (symbol,))
+                result = cursor.fetchone()
+                conn.close()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            print(f"Error getting entry price for {symbol}: {e}")
+            return 0
 
 # Global database instance
 trades_db = TradesDatabase()

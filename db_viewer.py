@@ -7,6 +7,7 @@ import json
 import os
 from streamlit_autorefresh import st_autorefresh
 from helpers.deldb import rename_to_creation_date
+from helpers.reset_positions import close_all_open_positions
 from db.trades_db import trades_db
 import subprocess
 import sys
@@ -249,6 +250,29 @@ def main():
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
             
+            with col5:
+                if st.button("Reset Positions", type="secondary", help="Close all open positions on IBKR and update database", key="reset_positions_raw"):
+                    try:
+                        
+                        with st.spinner("Closing all open positions on IBKR..."):
+                            count, positions = close_all_open_positions()
+                        
+                        if count > 0:
+                            total_pnl = sum(p['pnl'] for p in positions)
+                            st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
+                            
+                            # Show details of closed positions
+                            if positions:
+                                st.write("**Closed Positions:**")
+                                for pos in positions:
+                                    st.write(f"- {pos['symbol']}: {pos['shares']} shares, PnL: ${pos['pnl']:.2f}")
+                            
+                            st.rerun()
+                        else:
+                            st.info("No open positions found to close")
+                            
+                    except Exception as e:
+                        st.error(f"Error closing positions: {str(e)}")
             
             # Connect to database
             conn = get_db_connection()
@@ -702,6 +726,30 @@ def main():
                     except Exception as e:
                         st.error(f"Error: {str(e)}")
             
+            with col5:
+                if st.button("Reset Positions", type="secondary", help="Close all open positions on IBKR and update database", key="reset_positions_simplified"):
+                    try:
+                        
+                        
+                        with st.spinner("Closing all open positions on IBKR..."):
+                            count, positions = close_all_open_positions()
+                        
+                        if count > 0:
+                            total_pnl = sum(p['pnl'] for p in positions)
+                            st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
+                            
+                            # Show details of closed positions
+                            if positions:
+                                st.write("**Closed Positions:**")
+                                for pos in positions:
+                                    st.write(f"- {pos['symbol']}: {pos['shares']} shares, PnL: ${pos['pnl']:.2f}")
+                            
+                            st.rerun()
+                        else:
+                            st.info("No open positions found to close")
+                            
+                    except Exception as e:
+                        st.error(f"Error closing positions: {str(e)}")
             
             # Connect to database for raw view
             conn = get_db_connection()
@@ -1077,14 +1125,14 @@ def main():
                         'Symbol': df_filtered['symbol'].fillna('N/A') if 'symbol' in df_filtered.columns else 'N/A',
                         'Quantity': df_filtered['shares'] if 'shares' in df_filtered.columns else 0,
                         'Entry Price': df_filtered['entry_price'] if 'entry_price' in df_filtered.columns else 0,
-                        'Current Price': df_filtered['current_price'] if 'current_price' in df_filtered.columns else 0,
+                        'Exit Price': df_filtered['current_price'] if 'current_price' in df_filtered.columns else 0,
                         'Realized PnL': df_filtered['realized_pnl'] if 'realized_pnl' in df_filtered.columns else 0
                     })
                     
                     # Ensure numeric types for calculations and fill missing values
                     all_trades_display['Quantity'] = pd.to_numeric(all_trades_display['Quantity'], errors='coerce').fillna(0)
                     all_trades_display['Entry Price'] = pd.to_numeric(all_trades_display['Entry Price'], errors='coerce').fillna(0)
-                    all_trades_display['Current Price'] = pd.to_numeric(all_trades_display['Current Price'], errors='coerce').fillna(0)
+                    all_trades_display['Exit Price'] = pd.to_numeric(all_trades_display['Exit Price'], errors='coerce').fillna(0)
                     all_trades_display['Realized PnL'] = pd.to_numeric(all_trades_display['Realized PnL'], errors='coerce').fillna(0)
                     
                     # Clean up date format - extract just the date part
@@ -1093,7 +1141,7 @@ def main():
                     
                     # Calculate additional columns
                     all_trades_display['Cost Basis'] = all_trades_display['Quantity'] * all_trades_display['Entry Price']
-                    all_trades_display['Market Value'] = all_trades_display['Quantity'] * all_trades_display['Current Price']
+                    all_trades_display['Market Value'] = all_trades_display['Quantity'] * all_trades_display['Exit Price']
                     
                     # Calculate PnL percentage
                     all_trades_display['PnL (%)'] = all_trades_display.apply(
@@ -1103,7 +1151,7 @@ def main():
                     
                     # Select and reorder columns for display
                     display_columns = [
-                        'Date', 'Symbol', 'Quantity', 'Entry Price', 'Current Price',
+                        'Date', 'Symbol', 'Quantity', 'Entry Price', 'Exit Price',
                         'Cost Basis', 'Market Value', 'Realized PnL', 'PnL (%)'
                     ]
                     all_trades_display = all_trades_display[display_columns]
@@ -1125,7 +1173,7 @@ def main():
                     # Apply formatting to the display dataframe
                     formatted_all_trades = all_trades_display.copy()
                     formatted_all_trades['Entry Price'] = formatted_all_trades['Entry Price'].apply(format_currency)
-                    formatted_all_trades['Current Price'] = formatted_all_trades['Current Price'].apply(format_currency)
+                    formatted_all_trades['Exit Price'] = formatted_all_trades['Exit Price'].apply(format_currency)
                     formatted_all_trades['Cost Basis'] = formatted_all_trades['Cost Basis'].apply(format_currency)
                     formatted_all_trades['Market Value'] = formatted_all_trades['Market Value'].apply(format_currency)
                     formatted_all_trades['Realized PnL'] = formatted_all_trades['Realized PnL'].apply(format_currency)
@@ -1307,14 +1355,14 @@ def main():
                                 'Symbol': symbol_data['symbol'],
                                 'Quantity': symbol_data['position_shares'],
                                 'Entry Price': symbol_data['entry_price'],
-                                'Current Price': symbol_data['current_price'],
+                                'Exit Price': symbol_data['current_price'],
                                 'Unrealized PnL': symbol_data['unrealized_pnl'],
                                 'Realized PnL': symbol_data['realized_pnl']
                             })
                             
                             # Calculate additional columns
                             simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
-                            simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
+                            simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Exit Price']
                             
                             # Calculate total PnL (unrealized + realized)
                             total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
@@ -1325,7 +1373,7 @@ def main():
                             
                             # Select and reorder columns for display
                             display_columns = [
-                                'Date', 'Symbol', 'Quantity', 'Entry Price', 'Current Price',
+                                'Date', 'Symbol', 'Quantity', 'Entry Price', 'Exit Price',
                                 'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)'
                             ]
                             simplified_display = simplified_display[display_columns]
@@ -1344,7 +1392,7 @@ def main():
                             # Apply formatting to the display dataframe
                             formatted_display = simplified_display.copy()
                             formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
-                            formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
+                            formatted_display['Exit Price'] = formatted_display['Exit Price'].apply(format_currency)
                             formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
                             formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
                             formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
@@ -1651,7 +1699,7 @@ def main():
                                         'Symbol': simplified_df['symbol'],
                                         'Quantity': simplified_df['shares'],
                                         'Entry Price': simplified_df['entry_price'],
-                                        'Current Price': simplified_df['current_price'],
+                                        'Exit Price': simplified_df['current_price'],
                                         'Unrealized PnL': simplified_df['unrealized_pnl'],
                                         'Realized PnL': simplified_df['realized_pnl'],
                                         'Entry Time': simplified_df['entry_time'] if 'entry_time' in simplified_df.columns else 'N/A',
@@ -1661,13 +1709,13 @@ def main():
                                     # Ensure numeric types for calculations
                                     simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce').fillna(0)
                                     simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce').fillna(0)
-                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce').fillna(0)
+                                    simplified_display['Exit Price'] = pd.to_numeric(simplified_display['Exit Price'], errors='coerce').fillna(0)
                                     simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce').fillna(0)
                                     simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce').fillna(0)
                                     
                                     # Calculate additional columns
                                     simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
-                                    simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Current Price']
+                                    simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Exit Price']
                                     
                                     # Calculate total PnL (unrealized + realized)
                                     total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
@@ -1681,7 +1729,7 @@ def main():
                                     
                                     # Select and reorder columns for display (same as Top Performing Symbols)
                                     display_columns = [
-                                        'Symbol', 'Quantity', 'Entry Price', 'Current Price',
+                                        'Symbol', 'Quantity', 'Entry Price', 'Exit Price',
                                         'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
                                     ]
                                     simplified_display = simplified_display[display_columns]
@@ -1710,7 +1758,7 @@ def main():
                                     # Apply formatting to the display dataframe
                                     formatted_display = simplified_display.copy()
                                     formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
-                                    formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
+                                    formatted_display['Exit Price'] = formatted_display['Exit Price'].apply(format_currency)
                                     formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
                                     formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
                                     formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
@@ -2144,6 +2192,13 @@ def main():
                 vix_threshold = st.number_input("VIX Threshold:", 10, 50, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 1, key="alpha_vix_threshold")
             with col3:
                 vix_threshold_weight = st.number_input("VIX Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('weight', 15), 1, key="vix_threshold_weight")
+                vix_timeframe_market_calm = st.selectbox(
+                    "VIX Timeframe (Market Calm):", 
+                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
+                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('timeframe', '3min')),
+                    key="vix_timeframe_market_calm",
+                    help="Timeframe for VIX data in market calm analysis"
+                )
             
             # Additional Entry Checks
             st.markdown("---")
@@ -2593,6 +2648,13 @@ def main():
                     key="sp500_drop_threshold",
                     format="%.3f"
                 )
+                vix_timeframe_triggers = st.selectbox(
+                    "VIX Timeframe (Triggers):", 
+                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
+                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(hedge_config.get('triggers', {}).get('vix_timeframe', '3min')),
+                    key="vix_timeframe_triggers",
+                    help="Timeframe for VIX data in hedge trigger conditions"
+                )
             
             # Hedge Exit Conditions
             st.markdown("---")
@@ -2636,6 +2698,13 @@ def main():
                     step=1, 
                     key="sqqq_vwap_consecutive_bars",
                     help="Number of consecutive bars SQQQ must trade above VWAP"
+                )
+                vix_timeframe_exit = st.selectbox(
+                    "VIX Timeframe (Exit):", 
+                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
+                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(hedge_config.get('exit_conditions', {}).get('vix_timeframe', '3min')),
+                    key="vix_timeframe_exit",
+                    help="Timeframe for VIX data in hedge exit conditions"
                 )
             
             # Hedge Levels
@@ -2891,6 +2960,35 @@ def main():
                     value=datetime.strptime(trading_hours_config.get('safety_exit_time', '15:55'), "%H:%M").time(),
                     help="Time to force close all positions"
                 )
+            
+            # Weak Position Configuration
+            st.markdown("---")
+            st.write("**Weak Position Exit Configuration**")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                weak_min_gain = st.number_input(
+                    "Min Gain % (Weak Exit):", 
+                    min_value=-0.10, 
+                    max_value=0.0, 
+                    value=config.get('WEAK_POSITION_CONFIG', {}).get('min_gain_pct', -0.003), 
+                    step=0.001, 
+                    key="weak_min_gain",
+                    format="%.3f",
+                    help="Minimum gain percentage for weak exit (e.g., -0.003 = -0.3%)"
+                )
+            
+            with col2:
+                weak_max_gain = st.number_input(
+                    "Max Gain % (Weak Exit):", 
+                    min_value=0.0, 
+                    max_value=0.10, 
+                    value=config.get('WEAK_POSITION_CONFIG', {}).get('max_gain_pct', 0.012), 
+                    step=0.001, 
+                    key="weak_max_gain",
+                    format="%.3f",
+                    help="Maximum gain percentage for weak exit (e.g., 0.012 = 1.2%)"
+                )
         
         # Global Save Configuration Button
         st.markdown("---")
@@ -2958,7 +3056,7 @@ def main():
                     "momentum": {"weight": momentum_weight, "conditions": {"macd_positive": {"weight": macd_positive_weight}}},
                     "volume_volatility": {"weight": volume_weight, "conditions": {"volume_spike": {"weight": volume_spike_weight, "multiplier": volume_spike_multiplier}, "adx_threshold": {"weight": adx_weight, "threshold": adx_threshold}}},
                     "news": {"weight": news_weight, "conditions": {"no_major_news": {"weight": no_major_news_weight}}},
-                    "market_calm": {"weight": market_calm_weight, "conditions": {"vix_threshold": {"weight": vix_threshold_weight, "threshold": vix_threshold}}}
+                    "market_calm": {"weight": market_calm_weight, "conditions": {"vix_threshold": {"weight": vix_threshold_weight, "threshold": vix_threshold, "timeframe": vix_timeframe_market_calm}}}
                 },
                 "RISK_CONFIG": {
                     "alpha_score_threshold": alpha_threshold,
@@ -2999,12 +3097,17 @@ def main():
                     "enabled": hedge_enabled,
                     "hedge_symbol": hedge_symbol,
                     "hedge_options": hedge_options,
-                    "triggers": {"vix_threshold": vix_threshold, "sp500_drop_threshold": sp500_drop_threshold},
+                    "triggers": {
+                        "vix_threshold": vix_threshold, 
+                        "sp500_drop_threshold": sp500_drop_threshold,
+                        "vix_timeframe": vix_timeframe_triggers
+                    },
                     "exit_conditions": {
                         "vix_exit_threshold": vix_exit_threshold,
                         "vix_slope_period": vix_slope_period,
                         "sp500_recovery_threshold": sp500_recovery_threshold,
-                        "qqq_vwap_consecutive_bars": qqq_vwap_consecutive_bars
+                        "sqqq_vwap_consecutive_bars": sqqq_vwap_consecutive_bars,
+                        "vix_timeframe": vix_timeframe_exit
                     },
                     "hedge_levels": {
                         "early": {"beta": early_beta, "equity_pct": early_equity_pct},
@@ -3035,7 +3138,11 @@ def main():
                 #     "weak_exit_time": weak_exit_time.strftime("%H:%M"),
                 #     "hedge_force_exit_time": hedge_force_exit_time.strftime("%H:%M"),
                 #     "safety_exit_time": safety_exit_time.strftime("%H:%M")
-                # }
+                # },
+                "WEAK_POSITION_CONFIG": {
+                    "min_gain_pct": weak_min_gain,
+                    "max_gain_pct": weak_max_gain
+                }
             }
             
             success, message = save_config(new_config)
