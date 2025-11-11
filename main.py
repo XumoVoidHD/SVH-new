@@ -56,7 +56,10 @@ class Strategy:
         self.order_config = creds.ORDER_CONFIG
         self.trading_hours = creds.TRADING_HOURS
         self.hedge_config = creds.HEDGE_CONFIG
-        self.leverage_config = creds.LEVERAGE_CONFIG
+        # self.leverage_config = creds.LEVERAGE_CONFIG
+        
+        # Extract configured timeframes for each indicator for easy access
+        self._extract_configured_timeframes()
         self.weak_position_config = creds.WEAK_POSITION_CONFIG
         
         self.data = {}
@@ -78,14 +81,26 @@ class Strategy:
         self.hedge_active = False
         self.hedge_shares = 0
         self.hedge_symbol = self.hedge_config.hedge_symbol
-        self.current_leverage = 1.0
-        self.margin_used_leverage = 0
+        # self.current_leverage = 1.0
+        # self.margin_used_leverage = 0
 
         # Each stock can use risk_per_trade percentage of equity (default 0.4%)
         # No need to track total position size across stocks
         
         # Capital tracking
         self.used_capital = 0
+
+    def _extract_configured_timeframes(self):
+        """Extract and store configured timeframes for each indicator for easy access in alpha score calculations"""
+        self.tf = {}  # Dictionary to store configured timeframes
+        
+        indicators_dict = vars(self.indicators_config)
+        for indicator_name, indicator_config in indicators_dict.items():
+            if hasattr(indicator_config, 'timeframes') and indicator_config.timeframes:
+                # Store the first configured timeframe for this indicator
+                self.tf[indicator_name] = indicator_config.timeframes[0]
+        
+        print(f"Configured timeframes: {self.tf}")
 
     def _safe_broker_call(self, broker_method, *args, max_retries=5, base_delay=2.0, max_delay=300.0, **kwargs):
         """
@@ -285,173 +300,173 @@ class Strategy:
         
         return hedge_level, beta, equity_pct
     
-    def calculate_sharpe_ratio(self, days=30):
-        try:
-            # Get historical price data for this stock
-            historical_data = self.get_historical_data_with_retry(
-                stock=self.stock, 
-                bar_size="1 day", 
-                duration=f"{days + 5} D"  # Get a few extra days to ensure we have enough
-            )
+    # def calculate_sharpe_ratio(self, days=30):
+    #     try:
+    #         # Get historical price data for this stock
+    #         historical_data = self.get_historical_data_with_retry(
+    #             stock=self.stock, 
+    #             bar_size="1 day", 
+    #             duration=f"{days + 5} D"  # Get a few extra days to ensure we have enough
+    #         )
             
-            if historical_data is None or historical_data.empty:
-                print(f"[Sharpe] {self.stock}: No historical data available")
-                return 0.0
+    #         if historical_data is None or historical_data.empty:
+    #             print(f"[Sharpe] {self.stock}: No historical data available")
+    #             return 0.0
             
-            if len(historical_data) < 5:
-                print(f"[Sharpe] {self.stock}: Insufficient data ({len(historical_data)} < 5 days)")
-                return 0.0
+    #         if len(historical_data) < 5:
+    #             print(f"[Sharpe] {self.stock}: Insufficient data ({len(historical_data)} < 5 days)")
+    #             return 0.0
             
-            # Calculate daily returns
-            closes = historical_data['close'].values
-            daily_returns = []
+    #         # Calculate daily returns
+    #         closes = historical_data['close'].values
+    #         daily_returns = []
             
-            for i in range(1, len(closes)):
-                daily_return = (closes[i] - closes[i-1]) / closes[i-1]
-                daily_returns.append(daily_return)
+    #         for i in range(1, len(closes)):
+    #             daily_return = (closes[i] - closes[i-1]) / closes[i-1]
+    #             daily_returns.append(daily_return)
             
-            if len(daily_returns) < 5:
-                print(f"[Sharpe] {self.stock}: Insufficient returns ({len(daily_returns)} < 5)")
-                return 0.0
+    #         if len(daily_returns) < 5:
+    #             print(f"[Sharpe] {self.stock}: Insufficient returns ({len(daily_returns)} < 5)")
+    #             return 0.0
             
-            # Calculate mean and std of returns
-            mean_return = sum(daily_returns) / len(daily_returns)
-            variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
-            std_return = variance ** 0.5
+    #         # Calculate mean and std of returns
+    #         mean_return = sum(daily_returns) / len(daily_returns)
+    #         variance = sum((r - mean_return) ** 2 for r in daily_returns) / len(daily_returns)
+    #         std_return = variance ** 0.5
             
-            if std_return == 0:
-                print(f"[Sharpe] {self.stock}: Zero volatility")
-                return 0.0
+    #         if std_return == 0:
+    #             print(f"[Sharpe] {self.stock}: Zero volatility")
+    #             return 0.0
             
-            # Sharpe ratio (assuming risk-free rate = 0 for simplicity)
-            sharpe = mean_return / std_return
+    #         # Sharpe ratio (assuming risk-free rate = 0 for simplicity)
+    #         sharpe = mean_return / std_return
             
-            # Annualize the Sharpe ratio (optional: multiply by sqrt(252) for trading days)
-            annualized_sharpe = sharpe * (252 ** 0.5)
+    #         # Annualize the Sharpe ratio (optional: multiply by sqrt(252) for trading days)
+    #         annualized_sharpe = sharpe * (252 ** 0.5)
             
-            print(f"[Sharpe] {self.stock}: {annualized_sharpe:.2f} annualized (daily: {sharpe:.2f}, mean ret: {mean_return*100:.3f}%, std: {std_return*100:.3f}%, n={len(daily_returns)})")
+    #         print(f"[Sharpe] {self.stock}: {annualized_sharpe:.2f} annualized (daily: {sharpe:.2f}, mean ret: {mean_return*100:.3f}%, std: {std_return*100:.3f}%, n={len(daily_returns)})")
             
-            return sharpe
+    #         return sharpe
             
-        except Exception as e:
-            print(f"[Sharpe] Error for {self.stock}: {e}")
-            traceback.print_exc()
-            return 0.0
+    #     except Exception as e:
+    #         print(f"[Sharpe] Error for {self.stock}: {e}")
+    #         traceback.print_exc()
+    #         return 0.0
     
-    def calculate_10day_drawdown(self):
-        try:
-            # Get historical price data for this stock
-            historical_data = self.get_historical_data_with_retry(
-                stock=self.stock, 
-                bar_size="1 day", 
-                duration="15 D"  # Get 15 days to ensure we have at least 10
-            )
+    # def calculate_10day_drawdown(self):
+    #     try:
+    #         # Get historical price data for this stock
+    #         historical_data = self.get_historical_data_with_retry(
+    #             stock=self.stock, 
+    #             bar_size="1 day", 
+    #             duration="15 D"  # Get 15 days to ensure we have at least 10
+    #         )
             
-            if historical_data is None or historical_data.empty:
-                print(f"[DD-10d] {self.stock}: No historical data available")
-                return 0.0
+    #         if historical_data is None or historical_data.empty:
+    #             print(f"[DD-10d] {self.stock}: No historical data available")
+    #             return 0.0
             
-            if len(historical_data) < 2:
-                print(f"[DD-10d] {self.stock}: Insufficient data ({len(historical_data)} < 2 days)")
-                return 0.0
+    #         if len(historical_data) < 2:
+    #             print(f"[DD-10d] {self.stock}: Insufficient data ({len(historical_data)} < 2 days)")
+    #             return 0.0
             
-            # Get last 10 days of close prices
-            closes = historical_data['close'].values[-10:] if len(historical_data) >= 10 else historical_data['close'].values
+    #         # Get last 10 days of close prices
+    #         closes = historical_data['close'].values[-10:] if len(historical_data) >= 10 else historical_data['close'].values
             
-            # Calculate maximum drawdown
-            peak = closes[0]
-            max_drawdown = 0.0
+    #         # Calculate maximum drawdown
+    #         peak = closes[0]
+    #         max_drawdown = 0.0
             
-            for price in closes:
-                if price > peak:
-                    peak = price
-                drawdown = (peak - price) / peak if peak > 0 else 0.0
-                max_drawdown = max(max_drawdown, drawdown)
+    #         for price in closes:
+    #             if price > peak:
+    #                 peak = price
+    #             drawdown = (peak - price) / peak if peak > 0 else 0.0
+    #             max_drawdown = max(max_drawdown, drawdown)
             
-            print(f"[DD-10d] {self.stock}: {max_drawdown*100:.2f}% (peak=${peak:.2f}, current=${closes[-1]:.2f}, n={len(closes)} days)")
+    #         print(f"[DD-10d] {self.stock}: {max_drawdown*100:.2f}% (peak=${peak:.2f}, current=${closes[-1]:.2f}, n={len(closes)} days)")
             
-            return max_drawdown
+    #         return max_drawdown
             
-        except Exception as e:
-            print(f"[DD-10d] Error for {self.stock}: {e}")
-            traceback.print_exc()
-            return 0.0
+    #     except Exception as e:
+    #         print(f"[DD-10d] Error for {self.stock}: {e}")
+    #         traceback.print_exc()
+    #         return 0.0
     
-    def check_leverage_conditions(self):
-        if not self.leverage_config.enabled:
-            return 1.0
-        
-        conditions_met = 0
-        total_conditions = 4  # Alpha, VIX, Sharpe, Drawdown
-        condition_details = []
-        
-        try:
-            # 1. Check Alpha ≥ 85
-            if self.score >= 85:
-                conditions_met += 1
-                condition_details.append(f"Alpha {self.score} ≥ 85")
-            else:
-                condition_details.append(f"Alpha {self.score} < 85")
-            
-            # 2. Check VIX < 18 and falling
-            vix_timeframe = self.leverage_config.conditions.vix_timeframe
-            vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe, duration="30 D")
-            if not vix_data.empty and 'close' in vix_data.columns:
-                current_vix = vix_data['close'].iloc[-1]
-                
-                if current_vix < 18:
-                    # Check if falling (vs 10 days ago)
-                    if len(vix_data) >= 10:
-                        vix_10d_ago = vix_data['close'].iloc[-10]
-                        if current_vix < vix_10d_ago:
-                            conditions_met += 1
-                            condition_details.append(f"VIX {current_vix:.1f} < 18 & falling")
-                        else:
-                            condition_details.append(f"VIX {current_vix:.1f} < 18 but rising")
-                    else:
-                        condition_details.append(f"VIX history insufficient")
-                else:
-                    condition_details.append(f"VIX {current_vix:.1f} ≥ 18")
-            else:
-                condition_details.append(f"VIX data unavailable")
-            
-            # 3. Check Sharpe ratio > 2.5 (for this stock, last 30 days)
-            sharpe = self.calculate_sharpe_ratio(days=30)
-            if sharpe > 2.5:
-                conditions_met += 1
-                condition_details.append(f"Sharpe {sharpe:.2f} > 2.5")
-            else:
-                condition_details.append(f"Sharpe {sharpe:.2f} ≤ 2.5")
-            
-            # 4. Check 10-day drawdown < 2% (for this stock)
-            drawdown_10d = self.calculate_10day_drawdown()
-            if drawdown_10d < 0.02:
-                conditions_met += 1
-                condition_details.append(f"10d DD {drawdown_10d*100:.1f}% < 2%")
-            else:
-                condition_details.append(f"10d DD {drawdown_10d*100:.1f}% ≥ 2%")
-             
-        except Exception as e:
-            print(f"Error checking leverage conditions: {e}")
-            traceback.print_exc()
-            return 1.0
-        
-        # Determine leverage level
-        print(f"\n[Leverage Check] {self.stock}: {conditions_met}/{total_conditions} conditions met")
-        for detail in condition_details:
-            print(f"  {detail}")
-        
-        if conditions_met == total_conditions:  # ALL conditions met
-            leverage = 2.0
-            print(f"All conditions met → 2.0x leverage")
-        elif conditions_met >= 3:  # Signals weakening
-            leverage = 1.2
-            print(f"Partial conditions → 1.2x leverage")
-        else:
-            leverage = 1.0
-            print(f"Few conditions → 1.0x (no leverage)")
-        
-        return leverage
+    # def check_leverage_conditions(self):
+    #     if not self.leverage_config.enabled:
+    #         return 1.0
+    #     
+    #     conditions_met = 0
+    #     total_conditions = 4  # Alpha, VIX, Sharpe, Drawdown
+    #     condition_details = []
+    #     
+    #     try:
+    #         # 1. Check Alpha ≥ 85
+    #         if self.score >= 85:
+    #             conditions_met += 1
+    #             condition_details.append(f"Alpha {self.score} ≥ 85")
+    #         else:
+    #             condition_details.append(f"Alpha {self.score} < 85")
+    #         
+    #         # 2. Check VIX < 18 and falling
+    #         vix_timeframe = self.leverage_config.conditions.vix_timeframe
+    #         vix_data = self.get_historical_data_with_retry(stock="VIXY", bar_size=vix_timeframe, duration="30 D")
+    #         if not vix_data.empty and 'close' in vix_data.columns:
+    #             current_vix = vix_data['close'].iloc[-1]
+    #             
+    #             if current_vix < 18:
+    #                 # Check if falling (vs 10 days ago)
+    #                 if len(vix_data) >= 10:
+    #                     vix_10d_ago = vix_data['close'].iloc[-10]
+    #                     if current_vix < vix_10d_ago:
+    #                         conditions_met += 1
+    #                         condition_details.append(f"VIX {current_vix:.1f} < 18 & falling")
+    #                     else:
+    #                         condition_details.append(f"VIX {current_vix:.1f} < 18 but rising")
+    #                 else:
+    #                     condition_details.append(f"VIX history insufficient")
+    #             else:
+    #                 condition_details.append(f"VIX {current_vix:.1f} ≥ 18")
+    #         else:
+    #             condition_details.append(f"VIX data unavailable")
+    #         
+    #         # 3. Check Sharpe ratio > 2.5 (for this stock, last 30 days)
+    #         sharpe = self.calculate_sharpe_ratio(days=30)
+    #         if sharpe > 2.5:
+    #             conditions_met += 1
+    #             condition_details.append(f"Sharpe {sharpe:.2f} > 2.5")
+    #         else:
+    #             condition_details.append(f"Sharpe {sharpe:.2f} ≤ 2.5")
+    #         
+    #         # 4. Check 10-day drawdown < 2% (for this stock)
+    #         drawdown_10d = self.calculate_10day_drawdown()
+    #         if drawdown_10d < 0.02:
+    #             conditions_met += 1
+    #             condition_details.append(f"10d DD {drawdown_10d*100:.1f}% < 2%")
+    #         else:
+    #             condition_details.append(f"10d DD {drawdown_10d*100:.1f}% ≥ 2%")
+    #          
+    #     except Exception as e:
+    #         print(f"Error checking leverage conditions: {e}")
+    #         traceback.print_exc()
+    #         return 1.0
+    #     
+    #     # Determine leverage level
+    #     print(f"\n[Leverage Check] {self.stock}: {conditions_met}/{total_conditions} conditions met")
+    #     for detail in condition_details:
+    #         print(f"  {detail}")
+    #     
+    #     if conditions_met == total_conditions:  # ALL conditions met
+    #         leverage = 2.0
+    #         print(f"All conditions met → 2.0x leverage")
+    #     elif conditions_met >= 3:  # Signals weakening
+    #         leverage = 1.2
+    #         print(f"Partial conditions → 1.2x leverage")
+    #     else:
+    #         leverage = 1.0
+    #         print(f"Few conditions → 1.0x (no leverage)")
+    #     
+    #     return leverage
     
     def execute_hedge(self, hedge_level, beta, equity_pct):
         """Execute hedge by buying SQQQ ETF"""
@@ -487,6 +502,7 @@ class Strategy:
             self.hedge_active = True
             self.hedge_shares = hedge_shares
             self.hedge_level = hedge_level
+            self.hedge_entry_price = trade[1]
             
             # Update database with hedge information for the individual stock
             trades_db.update_strategy_data(self.stock,
@@ -499,17 +515,28 @@ class Strategy:
                 hedge_entry_time=datetime.now(pytz.timezone('US/Eastern'))
             )
             
-            # Update the centralized hedge symbol position
-            current_hedge_shares = trades_db.get_position_shares(self.hedge_symbol)
-            trades_db.update_strategy_data(self.hedge_symbol,
-                position_active=True,
-                position_shares=current_hedge_shares + hedge_shares,
-                entry_price=trade[1],  # Current price becomes the entry price for this addition
-                current_price=trade[1],
-                unrealized_pnl=0,  # Will be calculated in monitoring
-                entry_time=datetime.now(pytz.timezone('US/Eastern'))
-            )
-            
+            # Update the centralized hedge symbol position and manager capital
+            # Read current centralized hedge data under manager lock, compute new values and adjust manager capital, then release before DB update
+            with self.manager.manager_lock:
+                central_data = trades_db.get_latest_strategy_data(self.hedge_symbol) or {}
+                current_position_shares = central_data.get('position_shares', 0) or 0
+                current_used_capital = central_data.get('used_capital', 0) or 0
+                current_cumulative_shares = central_data.get('shares', 0) or 0
+                new_used_capital = current_used_capital + (trade[1] * hedge_shares)
+                new_total_shares = current_position_shares + hedge_shares
+                new_avg_entry_price = (new_used_capital / new_total_shares) if new_total_shares > 0 else trade[1]
+                # Manager capital: spend cash and increase used capital by cost
+                self.manager.available_capital -= (trade[1] * hedge_shares)
+                self.manager.used_capital += (trade[1] * hedge_shares)
+                trades_db.update_strategy_data(self.hedge_symbol,
+                    position_active=True,
+                    position_shares=new_total_shares,
+                    shares=current_cumulative_shares + hedge_shares,
+                    used_capital=new_used_capital,
+                    entry_price=new_avg_entry_price,
+                    current_price=trade[1]
+                )
+                     
             print(f"Hedge executed: Buy {hedge_shares} shares of {self.hedge_symbol}")
             print(f"Hedge position tracked in database for {self.stock}")
                 
@@ -552,7 +579,7 @@ class Strategy:
                     signal_details.append(f"S&P up {gain_pct*100:.1f}% > {sp500_recovery_threshold*100:.1f}%")
             
             # Check Nasdaq (SQQQ) trades above 5-min VWAP for 2+ consecutive bars
-            sqqq_data = self.get_historical_data_with_retry(stock="SQQQ", bar_size=5)
+            sqqq_data = self.get_historical_data_with_retry(stock="QQQ", bar_size=5)
             if not sqqq_data.empty and len(sqqq_data) >= 2 and 'close' in sqqq_data.columns:
                 # Calculate 5-min VWAP
                 sqqq_vwap = vwap.calc_vwap(sqqq_data)
@@ -565,7 +592,7 @@ class Strategy:
                     # Check if SQQQ is above VWAP for 2+ consecutive bars
                     if current_sqqq > sqqq_vwap_current and sqqq_data['close'].iloc[-2] > sqqq_vwap_prev:
                         recovery_signals += 1
-                        signal_details.append(f"SQQQ above 5-min VWAP for {sqqq_consecutive_bars}+ bars")
+                        signal_details.append(f"QQQ above 5-min VWAP for {sqqq_consecutive_bars}+ bars")
             
         except Exception as e:
             print(f"Error checking hedge exit conditions: {e}")
@@ -648,6 +675,33 @@ class Strategy:
                     hedge_beta=new_beta
                 )
                 
+                # Update the centralized hedge symbol position
+                # Only decrease position_shares (current holding), keep shares (cumulative total) unchanged
+                # Read under manager lock and compute; release before DB update
+                with self.manager.manager_lock:
+                    central_data = trades_db.get_latest_strategy_data(self.hedge_symbol) or {}
+                    current_position_shares = central_data.get('position_shares', 0) or 0
+                    current_used_capital = central_data.get('used_capital', 0) or 0
+                    current_realized_pnl = central_data.get('realized_pnl', 0) or 0
+                    # PnL for the shares being closed from this thread
+                    hedge_entry_price = getattr(self, 'hedge_entry_price', hedge_price)
+                    partial_hedge_pnl = (trade[1] - hedge_entry_price) * shares_to_close
+                    # Reduce used capital by cost basis of these shares
+                    new_used_capital = max(0, current_used_capital - (hedge_entry_price * shares_to_close))
+                    remaining_shares = max(0, current_position_shares - shares_to_close)
+                    new_avg_entry_price = (new_used_capital / remaining_shares) if remaining_shares > 0 else 0
+                    # Manager capital: receive cash from sale, release used capital at cost
+                    self.manager.available_capital += (trade[1] * shares_to_close)
+                    self.manager.used_capital -= (hedge_entry_price * shares_to_close)
+                trades_db.update_strategy_data(self.hedge_symbol,
+                    position_shares=remaining_shares,
+                    used_capital=new_used_capital,
+                    entry_price=new_avg_entry_price,
+                    realized_pnl=current_realized_pnl + partial_hedge_pnl,
+                    current_price=trade[1]
+                    # shares remains unchanged (cumulative total)
+                )
+                
                 print(f"Hedge scaled down successfully: {current_hedge_level} → {new_level}")
                 print(f"Remaining hedge: {self.hedge_shares} shares ({new_equity_pct*100:.1f}% of equity)")
             
@@ -662,7 +716,7 @@ class Strategy:
             return
         
         try:
-            print(f"Closing hedge: Selling {self.hedge_shares} shares of {self.hedge_symbol}")
+            print(f"[HEDGE] Initiating close for {self.hedge_symbol}: selling {self.hedge_shares} shares")
             
             # Get current hedge symbol price for P&L calculation
             current_hedge_price = self.get_current_price_with_retry(self.hedge_symbol)
@@ -675,14 +729,21 @@ class Strategy:
             if hasattr(self, 'hedge_entry_price') and self.hedge_entry_price:
                 hedge_pnl = (current_hedge_price - self.hedge_entry_price) * self.hedge_shares
             
+            print(f"[HEDGE] Placing SELL order: symbol={self.hedge_symbol}, qty={self.hedge_shares}, mkt_price={current_hedge_price}")
             trade = self.broker.place_order(symbol=self.hedge_symbol, qty=self.hedge_shares, order_type="MARKET", price=current_hedge_price, side="SELL")
             if trade is None:
                 print(f"Unable to place hedge order for {self.hedge_symbol}")
                 return
+            else:
+                print(f"[HEDGE] SELL filled: price={trade[1]} (order_id={trade[0] if len(trade) > 0 else 'N/A'})")
 
+            # Store hedge_shares before resetting
+            shares_to_sell = self.hedge_shares
+            
             # Update hedge status
             self.hedge_active = False
             self.hedge_shares = 0
+            print(f"[HEDGE] Local state updated: hedge_active={self.hedge_active}, hedge_shares={self.hedge_shares}")
             
             # Update database with hedge closure for individual stock
             trades_db.update_strategy_data(self.stock,
@@ -694,31 +755,50 @@ class Strategy:
             )
             
             # Update the centralized hedge symbol position
-            current_hedge_shares = trades_db.get_position_shares(self.hedge_symbol)
-            current_realized_pnl = trades_db.get_realized_pnl(self.hedge_symbol)
-            remaining_hedge_shares = max(0, current_hedge_shares - self.hedge_shares)
+            # Only decrease position_shares (current holding), keep shares (cumulative total) unchanged
+            # Read under manager lock and compute; release before DB update
+            with self.manager.manager_lock:
+                central_data = trades_db.get_latest_strategy_data(self.hedge_symbol) or {}
+                current_position_shares = central_data.get('position_shares', 0) or 0
+                current_realized_pnl = central_data.get('realized_pnl', 0) or 0
+                current_used_capital = central_data.get('used_capital', 0) or 0
+                print(f"[HEDGE][DB SNAPSHOT] position_shares={current_position_shares}, used_capital={current_used_capital}, realized_pnl={current_realized_pnl}")
+                remaining_hedge_shares = max(0, current_position_shares - shares_to_sell)
+                hedge_entry_price = getattr(self, 'hedge_entry_price', current_hedge_price)
+                new_used_capital = max(0, current_used_capital - (hedge_entry_price * shares_to_sell))
+                pnl_increment = hedge_pnl
+                print(f"[HEDGE][CALC] shares_to_sell={shares_to_sell}, hedge_entry_price={hedge_entry_price}, fill_price={trade[1]}")
+                print(f"[HEDGE][CALC] remaining_shares={remaining_hedge_shares}, new_used_capital={new_used_capital}, pnl_increment={pnl_increment}")
+                # Manager capital adjustments
+                self.manager.available_capital += (trade[1] * shares_to_sell)
+                self.manager.used_capital -= (hedge_entry_price * shares_to_sell)
+                print(f"[HEDGE][MANAGER] available_capital={self.manager.available_capital:.2f}, used_capital={self.manager.used_capital:.2f}")
+
+                if remaining_hedge_shares > 0:
+                    # Partial closure - update position_shares only (shares remains cumulative total)
+                    print(f"[HEDGE][DB UPDATE PARTIAL] symbol={self.hedge_symbol}, position_shares={remaining_hedge_shares}, used_capital={new_used_capital}, entry_price={(new_used_capital / remaining_hedge_shares) if remaining_hedge_shares > 0 else 0}, realized_pnl={current_realized_pnl + hedge_pnl}, current_price={current_hedge_price}")
+                    trades_db.update_strategy_data(self.hedge_symbol,
+                        position_shares=remaining_hedge_shares,
+                        used_capital=new_used_capital,
+                        entry_price=(new_used_capital / remaining_hedge_shares) if remaining_hedge_shares > 0 else 0,
+                        realized_pnl=current_realized_pnl + hedge_pnl,
+                        current_price=current_hedge_price
+                    )
+                else:
+                    # Full closure - close the position (shares still remains as cumulative total)
+                    print(f"[HEDGE][DB UPDATE FULL] symbol={self.hedge_symbol}, position_shares=0, used_capital=0, entry_price=0, realized_pnl={current_realized_pnl + hedge_pnl}, current_price={current_hedge_price}, close_time=now(Eastern)")
+                    trades_db.update_strategy_data(self.hedge_symbol,
+                        position_active=False,
+                        position_shares=0,
+                        used_capital=0,
+                        realized_pnl=current_realized_pnl + hedge_pnl,
+                        unrealized_pnl=0,
+                        current_price=current_hedge_price,
+                        close_time=datetime.now(pytz.timezone('US/Eastern'))
+                    )
             
-            if remaining_hedge_shares > 0:
-                # Partial closure - update shares and calculate realized PnL
-                trades_db.update_strategy_data(self.hedge_symbol,
-                    position_shares=remaining_hedge_shares,
-                    realized_pnl=current_realized_pnl + hedge_pnl,
-                    current_price=current_hedge_price
-                )
-            else:
-                # Full closure - close the position
-                trades_db.update_strategy_data(self.hedge_symbol,
-                    position_active=False,
-                    position_shares=0,
-                    realized_pnl=current_realized_pnl + hedge_pnl,
-                    unrealized_pnl=0,
-                    current_price=current_hedge_price,
-                    close_time=datetime.now(pytz.timezone('US/Eastern'))
-                )
-            
-            print(f"Hedge closed successfully")
-            print(f"Hedge P&L: ${hedge_pnl:.2f}")
-            print(f"Hedge position updated in database for {self.stock}")
+            print(f"[HEDGE] Close complete. Hedge P&L: ${hedge_pnl:.2f}")
+            print(f"[HEDGE] Centralized position for {self.hedge_symbol} updated.")
                 
         except Exception as e:
             print(f"Error closing hedge: {e}")
@@ -745,7 +825,6 @@ class Strategy:
             weak_exit_time = self.trading_hours.weak_exit_time
             print(f"{weak_exit_time}: Position not in weak range ({current_gain_pct*100:.1f}% gain) - keeping position")
 
-
     def safety_exit_all(self):
         # Get exit time from configuration
         safety_exit_time = self.trading_hours.safety_exit_time
@@ -764,12 +843,10 @@ class Strategy:
         """Market-on-close exit at 4:00 PM"""
         if self.position_active:
             print("4:00 PM Market-On-Close: Closing remaining positions")
-            self.close_position('market_on_close', self.position_shares)
-
-        
+            self.close_position('market_on_close', self.position_shares)       
     
     def fetch_data_by_timeframe(self):
-        """Fetch and store data for each configured timeframe with retry logic"""
+        """Fetch and store data for each configured timeframe with retry logic and rate limiting"""
         # Get all unique timeframes from indicator configurations
         timeframes_needed = set()
         
@@ -787,39 +864,58 @@ class Strategy:
         
         # Fetch data for each needed timeframe
         for tf_name in timeframes_needed:
-            # Extract period number from timeframe name (e.g., '3min' -> 3)
-            period = int(tf_name.replace('min', ''))
+            # Extract period number from timeframe name
+            # Handle formats: '3min', '3mins', '3 min', '3 mins'
+            period_str = tf_name.replace('mins', '').replace('min', '').strip()
+            period = int(period_str)
             
             # Try to fetch data with retries
             max_retries = 10
-            retry_delay = 2  # seconds
+            base_delay = 2  # Base delay in seconds
+            
+            # Add initial random delay to desynchronize threads (0-2 seconds)
+            initial_jitter = random.uniform(0, 2)
+            time.sleep(initial_jitter)
             
             for attempt in range(max_retries):
-                try:
-                    data = self.get_historical_data_with_retry(stock=self.stock, bar_size=period)
-                    
-                    # Check if data is valid and not empty
-                    if data is not None and hasattr(data, 'empty') and not data.empty and len(data) > 0:
-                        self.data[tf_name] = data
-                        print(f"Fetched {tf_name} data: {len(data)} candles")
-                        break
-                    else:
+                # Use semaphore to limit concurrent requests across all threads
+                # Only hold semaphore during the actual request, not during retry delays
+                with self.manager.data_request_semaphore:
+                    try:
+                        data = self.get_historical_data_with_retry(stock=self.stock, bar_size=period)
+                        
+                        # Check if data is valid and not empty
+                        if data is not None and hasattr(data, 'empty') and not data.empty and len(data) > 0:
+                            self.data[tf_name] = data
+                            print(f"Fetched {tf_name} data: {len(data)} candles")
+                            break
+                        else:
+                            data = None  # Mark as failed for retry logic below
+                            
+                    except Exception as e:
+                        print(f"Error fetching {tf_name} data (attempt {attempt + 1}/{max_retries}): {e}")
+                        data = None  # Mark as failed for retry logic below
+                
+                    # Handle retry logic outside semaphore so other threads can proceed
+                    if data is None or (hasattr(data, 'empty') and data.empty):
                         if attempt < max_retries - 1:
-                            print(f"Failed to fetch {tf_name} data (attempt {attempt + 1}/{max_retries}) - data is None or empty, retrying in {retry_delay}s...")
+                            # Exponential backoff with randomization to prevent synchronized retries
+                            exponential_delay = base_delay * (2 ** attempt)
+                            # Add jitter: random value between 0.5x and 1.5x of exponential delay
+                            jitter_factor = random.uniform(0.5, 1.5)
+                            retry_delay = exponential_delay * jitter_factor
+                            # Cap maximum delay at 60 seconds
+                            retry_delay = min(retry_delay, 60)
+                            
+                            print(f"Failed to fetch {tf_name} data (attempt {attempt + 1}/{max_retries}) - retrying in {retry_delay:.2f}s...")
                             time.sleep(retry_delay)
-                            retry_delay *= 2  # Exponential backoff
                         else:
                             print(f"Failed to fetch {tf_name} data after {max_retries} attempts - data is None or empty")
                             self.data[tf_name] = pd.DataFrame()
-                            
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        print(f"Error fetching {tf_name} data (attempt {attempt + 1}/{max_retries}): {e}, retrying in {retry_delay}s...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
+                            break
                     else:
-                        print(f"Failed to fetch {tf_name} data after {max_retries} attempts due to error: {e}")
-                        self.data[tf_name] = pd.DataFrame()
+                        # Success - data was fetched, break out of retry loop
+                        break
     
     def calculate_indicators_by_timeframe(self):
         """Calculate indicators for each timeframe separately"""
@@ -924,14 +1020,45 @@ class Strategy:
     def _check_trend_conditions(self):
         """Check trend conditions"""
         try:
-            if '3min' not in self.data or '5min' not in self.indicators or '20min' not in self.indicators:
+            # Get configured timeframes from indicator config
+            vwap_tf = self.tf.get('vwap')
+            ema1_tf = self.tf.get('ema1')
+            ema2_tf = self.tf.get('ema2')
+            
+            # Verify all required timeframes and indicators are available
+            if not all([vwap_tf, ema1_tf, ema2_tf]):
+                print(f"Missing timeframe configuration: vwap={vwap_tf}, ema1={ema1_tf}, ema2={ema2_tf}")
+                return False
+            
+            # Check if timeframes exist in data and indicators
+            if vwap_tf not in self.data or vwap_tf not in self.indicators:
+                print(f"Missing data or indicators for {vwap_tf}")
+                return False
+            if ema1_tf not in self.indicators or ema2_tf not in self.indicators:
+                print(f"Missing indicators for ema1={ema1_tf} or ema2={ema2_tf}")
+                return False
+            
+            # Check if specific indicator keys exist and data is not empty
+            if 'vwap' not in self.indicators[vwap_tf] or self.indicators[vwap_tf]['vwap'].empty:
+                print(f"Missing or empty VWAP indicator for {vwap_tf}")
+                return False
+            if 'ema1' not in self.indicators[ema1_tf] or self.indicators[ema1_tf]['ema1'].empty:
+                print(f"Missing or empty EMA1 indicator for {ema1_tf}")
+                return False
+            if 'ema2' not in self.indicators[ema2_tf] or self.indicators[ema2_tf]['ema2'].empty:
+                print(f"Missing or empty EMA2 indicator for {ema2_tf}")
+                return False
+            
+            # Check if data has 'close' column
+            if 'close' not in self.data[vwap_tf].columns or self.data[vwap_tf].empty:
+                print(f"Missing or empty close data for {vwap_tf}")
                 return False
             
             # Price > VWAP
-            price_vwap_ok = bool(self.data['3min']['close'].iloc[-1] > self.indicators['3min']['vwap'].iloc[-1])
+            price_vwap_ok = bool(self.data[vwap_tf]['close'].iloc[-1] > self.indicators[vwap_tf]['vwap'].iloc[-1])
             
             # EMA1 > EMA2 (5-min EMA > 20-min EMA)
-            ema_cross_ok = bool(self.indicators['5min']['ema1'].iloc[-1] > self.indicators['20min']['ema2'].iloc[-1])
+            ema_cross_ok = bool(self.indicators[ema1_tf]['ema1'].iloc[-1] > self.indicators[ema2_tf]['ema2'].iloc[-1])
             
             return price_vwap_ok and ema_cross_ok
         except Exception as e:
@@ -940,27 +1067,71 @@ class Strategy:
     
     def _check_momentum_conditions(self):
         """Check momentum conditions"""
-        if '3min' not in self.indicators:
+        # Get configured timeframe for MACD
+        macd_tf = self.tf.get('macd')
+        
+        if not macd_tf or macd_tf not in self.indicators:
+            print(f"Missing MACD timeframe or indicators: {macd_tf}")
             return False
         
-        return bool(self.indicators['3min']['macd'].iloc[-1] > 0)
+        # Check if MACD indicator exists and is not empty
+        if 'macd' not in self.indicators[macd_tf]:
+            print(f"Missing MACD indicator key for {macd_tf}")
+            return False
+        
+        if self.indicators[macd_tf]['macd'].empty:
+            print(f"Empty MACD indicator data for {macd_tf}")
+            return False
+        
+        try:
+            return bool(self.indicators[macd_tf]['macd'].iloc[-1] > 0)
+        except Exception as e:
+            print(f"Error accessing MACD indicator: {e}")
+            return False
     
     def _check_volume_volatility_conditions(self):
         """Check volume and volatility conditions"""
-        if '3min' not in self.data or '3min' not in self.indicators:
+        # Get configured timeframes for volume and ADX
+        volume_avg_tf = self.tf.get('volume_avg')
+        adx_tf = self.tf.get('adx')
+        
+        if not volume_avg_tf or volume_avg_tf not in self.data or volume_avg_tf not in self.indicators:
+            print(f"Missing volume_avg timeframe or data/indicators: {volume_avg_tf}")
             return False
         
-        # Volume spike check
-        recent_volume = self.data['3min']['volume'].iloc[-1]
-        avg_volume = self.indicators['3min']['volume_avg'].iloc[-1]
-        multiplier = self.alpha_score_config.volume_volatility.conditions.volume_spike.multiplier
-        volume_ok = bool(recent_volume > multiplier * avg_volume)
+        if not adx_tf or adx_tf not in self.indicators:
+            print(f"Missing ADX timeframe or indicators: {adx_tf}")
+            return False
         
-        # ADX threshold check
-        adx_threshold = self.alpha_score_config.volume_volatility.conditions.adx_threshold.threshold
-        adx_ok = bool(self.indicators['3min']['adx'].iloc[-1] > adx_threshold)
+        # Check if specific indicator keys exist and data is not empty
+        if 'volume_avg' not in self.indicators[volume_avg_tf] or self.indicators[volume_avg_tf]['volume_avg'].empty:
+            print(f"Missing or empty volume_avg indicator for {volume_avg_tf}")
+            return False
         
-        return volume_ok and adx_ok
+        if 'adx' not in self.indicators[adx_tf] or self.indicators[adx_tf]['adx'].empty:
+            print(f"Missing or empty ADX indicator for {adx_tf}")
+            return False
+        
+        # Check if data has 'volume' column
+        if 'volume' not in self.data[volume_avg_tf].columns or self.data[volume_avg_tf].empty:
+            print(f"Missing or empty volume data for {volume_avg_tf}")
+            return False
+        
+        try:
+            # Volume spike check
+            recent_volume = self.data[volume_avg_tf]['volume'].iloc[-1]
+            avg_volume = self.indicators[volume_avg_tf]['volume_avg'].iloc[-1]
+            multiplier = self.alpha_score_config.volume_volatility.conditions.volume_spike.multiplier
+            volume_ok = bool(recent_volume > multiplier * avg_volume)
+            
+            # ADX threshold check
+            adx_threshold = self.alpha_score_config.volume_volatility.conditions.adx_threshold.threshold
+            adx_ok = bool(self.indicators[adx_tf]['adx'].iloc[-1] > adx_threshold)
+            
+            return volume_ok and adx_ok
+        except Exception as e:
+            print(f"Error checking volume/volatility conditions: {e}")
+            return False
     
     def _check_market_calm_conditions(self):
         """Check market calm conditions (VIX)"""
@@ -986,56 +1157,91 @@ class Strategy:
         if self.score < creds.RISK_CONFIG.alpha_score_threshold:
             self.additional_checks_passed = False
             print(f"\nAdditional Checks Passed: {self.additional_checks_passed} (Alpha Score too low)")
-        elif '3min' not in self.data or '3min' not in self.indicators:
-            self.additional_checks_passed = False
-            print(f"\nAdditional Checks Passed: {self.additional_checks_passed} (Missing data/indicators)")
         else:
-            # Check +2x volume
-            recent_volume = self.data['3min']['volume'].iloc[-1]
-            avg_volume = self.indicators['3min']['volume_avg'].iloc[-1]
-            volume_multiplier = self.additional_checks_config.volume_multiplier
+            # Get configured timeframes
+            volume_avg_tf = self.tf.get('volume_avg')
             
-            volume_check = bool(recent_volume > volume_multiplier * avg_volume)
-            print(f"{'Passed' if volume_check else 'Failed'} +{volume_multiplier}x volume check {'passed' if volume_check else 'failed'}")
+            # Initialize variables
+            volume_check = False
+            vwap_slope_check = False
+            market_conditions_check = False
             
-            # Check VWAP slope
-            vwap_slope_check = self._check_vwap_slope()
-            
-            # Alpha Score based TRIN/TICK check
-            # If Alpha Score >= bypass_threshold → enter without TRIN/TICK check
-            # If base_threshold <= Alpha Score < bypass_threshold → require both TRIN <= threshold and TICK MA >= threshold
-            bypass_alpha = self.additional_checks_config.trin_tick_bypass_alpha
-            if self.score >= bypass_alpha:
-                market_conditions_check = True
-                print(f"Alpha Score >= {bypass_alpha} ({self.score}) - Bypassing TRIN/TICK check")
+            if not volume_avg_tf or volume_avg_tf not in self.data or volume_avg_tf not in self.indicators:
+                self.additional_checks_passed = False
+                print(f"\nAdditional Checks Passed: {self.additional_checks_passed} (Missing data/indicators for {volume_avg_tf})")
+            elif 'volume_avg' not in self.indicators[volume_avg_tf] or self.indicators[volume_avg_tf]['volume_avg'].empty:
+                self.additional_checks_passed = False
+                print(f"\nAdditional Checks Passed: {self.additional_checks_passed} (Missing or empty volume_avg indicator for {volume_avg_tf})")
+            elif 'volume' not in self.data[volume_avg_tf].columns or self.data[volume_avg_tf].empty:
+                self.additional_checks_passed = False
+                print(f"\nAdditional Checks Passed: {self.additional_checks_passed} (Missing or empty volume data for {volume_avg_tf})")
             else:
-                market_conditions_check = self._check_trin_tick_conditions()
-                print(f"Alpha Score < {bypass_alpha} ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
-            
-            self.additional_checks_passed = bool(volume_check and vwap_slope_check and market_conditions_check)
-            
-            print(f"\nAdditional Checks Passed: {self.additional_checks_passed}")
+                try:
+                    # Check +2x volume
+                    recent_volume = self.data[volume_avg_tf]['volume'].iloc[-1]
+                    avg_volume = self.indicators[volume_avg_tf]['volume_avg'].iloc[-1]
+                    volume_multiplier = self.additional_checks_config.volume_multiplier
+                    
+                    volume_check = bool(recent_volume > volume_multiplier * avg_volume)
+                    print(f"{'Passed' if volume_check else 'Failed'} +{volume_multiplier}x volume check {'passed' if volume_check else 'failed'}")
+                except Exception as e:
+                    print(f"Error checking volume: {e}")
+                    volume_check = False
+                
+                # Check VWAP slope
+                vwap_slope_check = self._check_vwap_slope()
+                
+                # Alpha Score based TRIN/TICK check
+                # If Alpha Score >= bypass_threshold → enter without TRIN/TICK check
+                # If base_threshold <= Alpha Score < bypass_threshold → require both TRIN <= threshold and TICK MA >= threshold
+                bypass_alpha = self.additional_checks_config.trin_tick_bypass_alpha
+                if self.score >= bypass_alpha:
+                    market_conditions_check = True
+                    print(f"Alpha Score >= {bypass_alpha} ({self.score}) - Bypassing TRIN/TICK check")
+                else:
+                    market_conditions_check = self._check_trin_tick_conditions()
+                    print(f"Alpha Score < {bypass_alpha} ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
+                
+                self.additional_checks_passed = bool(volume_check and vwap_slope_check and market_conditions_check)
+                
+                print(f"\nAdditional Checks Passed: {self.additional_checks_passed}")
         
         # Always update database with additional checks status (regardless of pass/fail)
         trades_db.update_strategy_data(self.stock, additional_checks_passed=self.additional_checks_passed)
     
     def _check_vwap_slope(self):
         """Check VWAP slope condition"""
-        vwap_series = self.indicators['3min']['vwap']
-        if len(vwap_series) < 2:
+        # Get configured timeframe for VWAP
+        vwap_tf = self.tf.get('vwap')
+        
+        if not vwap_tf or vwap_tf not in self.indicators:
+            print(f"VWAP slope check failed: missing timeframe or indicators for {vwap_tf}")
+            return False
+        
+        # Check if VWAP indicator exists and is not empty
+        if 'vwap' not in self.indicators[vwap_tf]:
+            print(f"VWAP slope check failed: missing VWAP indicator key for {vwap_tf}")
+            return False
+        
+        vwap_series = self.indicators[vwap_tf]['vwap']
+        if vwap_series.empty or len(vwap_series) < 2:
             print("VWAP slope check failed: insufficient data")
             return False
         
-        current_vwap = vwap_series.iloc[-1]
-        vwap_3min_ago = vwap_series.iloc[-2]
-        vwap_slope = (current_vwap - vwap_3min_ago) / self.additional_checks_config.vwap_slope_period
-        
-        threshold = self.additional_checks_config.vwap_slope_threshold
-        slope_ok = bool(vwap_slope > threshold)
-        
-        print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
-        
-        return slope_ok
+        try:
+            current_vwap = vwap_series.iloc[-1]
+            vwap_period_ago = vwap_series.iloc[-2]
+            vwap_slope = (current_vwap - vwap_period_ago) / self.additional_checks_config.vwap_slope_period
+            
+            threshold = self.additional_checks_config.vwap_slope_threshold
+            slope_ok = bool(vwap_slope > threshold)
+            
+            print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
+            
+            return slope_ok
+        except Exception as e:
+            print(f"Error checking VWAP slope: {e}")
+            return False
     
     def _check_trin_tick_conditions(self):
         """Check TRIN and TICK market breadth conditions"""
@@ -1087,13 +1293,8 @@ class Strategy:
             return False 
         
     def calculate_position_size(self):
-        
-        hedge_level, hedge_beta, hedge_equity_pct = self.check_hedge_triggers()
-        if hedge_level:
-            self.execute_hedge(hedge_level, hedge_beta, hedge_equity_pct)
-        
-        leverage_multiplier = self.check_leverage_conditions()
-        self.current_leverage = leverage_multiplier
+        # leverage_multiplier = self.check_leverage_conditions()
+        # self.current_leverage = leverage_multiplier
         
         account_equity = creds.EQUITY
         current_price = self.get_current_price_with_retry(self.stock)
@@ -1102,12 +1303,14 @@ class Strategy:
         base_risk_per_trade = creds.RISK_CONFIG.risk_per_trade
         
         # Apply leverage to risk_per_trade (NOT to shares)
-        risk_per_trade = base_risk_per_trade * leverage_multiplier
+        # risk_per_trade = base_risk_per_trade * leverage_multiplier
+        risk_per_trade = base_risk_per_trade
         
         print(f"\n[Position Sizing] {self.stock}")
         print(f"  - Base risk: {base_risk_per_trade*100:.2f}%")
-        print(f"  - Leverage: {leverage_multiplier:.1f}x")
-        print(f"  - Adjusted risk: {risk_per_trade*100:.2f}%")
+        # print(f"  - Leverage: {leverage_multiplier:.1f}x")
+        # print(f"  - Adjusted risk: {risk_per_trade*100:.2f}%")
+        print(f"  - Adjusted risk: {base_risk_per_trade*100:.2f}%")
         
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
@@ -1125,16 +1328,16 @@ class Strategy:
         
         shares = int(capital_for_trade / current_price)
         
-        # Track margin usage if leverage applied
-        if leverage_multiplier > 1.0:
-            base_capital = (account_equity * base_risk_per_trade) / stop_loss_pct
-            self.margin_used_leverage = capital_for_trade - base_capital
-            print(f"  - Base capital: ${base_capital:,.0f}")
-            print(f"  - Leveraged capital: ${capital_for_trade:,.0f}")
-            print(f"  - Margin used: ${self.margin_used_leverage:,.0f}")
-        else:
-            self.margin_used_leverage = 0
-            print(f"  - No leverage applied")
+        # # Track margin usage if leverage applied
+        # if leverage_multiplier > 1.0:
+        #     base_capital = (account_equity * base_risk_per_trade) / stop_loss_pct
+        #     self.margin_used_leverage = capital_for_trade - base_capital
+        #     print(f"  - Base capital: ${base_capital:,.0f}")
+        #     print(f"  - Leveraged capital: ${capital_for_trade:,.0f}")
+        #     print(f"  - Margin used: ${self.margin_used_leverage:,.0f}")
+        # else:
+        #     self.margin_used_leverage = 0
+        #     print(f"  - No leverage applied")
         
         data_3min = self.get_historical_data_with_retry(stock=self.stock, bar_size=3)
         vwap_value = vwap.calc_vwap(data_3min).iloc[-1]
@@ -1210,6 +1413,11 @@ class Strategy:
                 else:
                     if trade[2] != shares:
                         print(f"Order partially filled for {self.stock}: {trade}")
+                    print(f"Checking hedge triggers...")
+                    hedge_level, hedge_beta, hedge_equity_pct = self.check_hedge_triggers()
+                    if hedge_level:
+                        print(f"Executing hedge...")
+                        self.execute_hedge(hedge_level, hedge_beta, hedge_equity_pct)
                     shares = trade[2]
                     print(f"Order placed for {self.stock}: {trade}")
                     with self.manager.manager_lock:
@@ -1281,7 +1489,7 @@ class Strategy:
                         
             # 4:00 PM - Market-on-close for any remaining positions
             elif current_time >= market_close_time:
-                # self.market_on_close_exit()
+                self.market_on_close_exit()
                 break  # End trading for the day
 
             if not TESTING:            
@@ -1557,6 +1765,11 @@ class Strategy:
                     used_capital=self.used_capital,
                     close_time=self.close_time
                 )
+
+                # If a hedge is active for this position, close it as well
+                if self.hedge_active:
+                    print(f"Base position closed for {self.stock}; closing active hedge ({self.hedge_symbol})")
+                    self.close_hedge()
         else:
             # Partial position closure
             print(f"Partial position closed. Remaining shares: {self.position_shares}")
@@ -1961,6 +2174,11 @@ class StrategyManager:
         self.unrealized_pnl = 0
         self.stocks_list, self.stocks_dict = [], []
         self.stop_event = threading.Event()
+        
+        # Semaphore to limit concurrent data requests across all strategy threads
+        # This prevents thundering herd problem when multiple threads request data simultaneously
+        # Limit to 5 concurrent requests to avoid overwhelming the broker API
+        self.data_request_semaphore = threading.Semaphore(5)
         hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
         print(f"Adding hedge symbol {hedge_symbol} to database for all threads")
         
@@ -1973,13 +2191,15 @@ class StrategyManager:
         
         trades_db.add_stocks_from_list([hedge_symbol])
         
+        # Initialize centralized hedge symbol with an entry_time stamped at manager startup (US/Eastern)
+        eastern_tz = pytz.timezone('US/Eastern')
         trades_db.update_strategy_data(hedge_symbol,
             position_active=False,
             position_shares=0,
             entry_price=0,
             stop_loss_price=0,
             take_profit_price=0,
-            entry_time=0,
+            entry_time=datetime.now(eastern_tz),
             current_price=0,
             unrealized_pnl=0,
             realized_pnl=0,
@@ -1992,7 +2212,7 @@ class StrategyManager:
         
         # Start drawdown monitoring thread AFTER everything is initialized
         drawdown_thread = threading.Thread(target=self.monitor_drawdown_loop, name="DrawdownMonitor", daemon=True)
-        drawdown_thread.start()
+        # drawdown_thread.start()
     
     def calculate_portfolio_atr14(self):
         try:
@@ -2003,7 +2223,7 @@ class StrategyManager:
                 if strategy.position_active and strategy.position_shares > 0:
                     active_count += 1
                     try:
-                        data_3min = self.broker.get_historical_data_stock(stock=strategy.stock, bar_size=3)
+                        data_3min = self.broker.get_historical_data_stock(stock=strategy.stock, bar_size="3 mins")
                         if data_3min is not None and not data_3min.empty:
                             atr14 = atr.calc_atr(data_3min, 14)
                             if atr14 is not None and not atr14.empty:
@@ -2064,6 +2284,24 @@ class StrategyManager:
                     eastern_tz = pytz.timezone('US/Eastern')
                     now = datetime.now(eastern_tz)
                     current_time_str = now.strftime("%H:%M")
+
+                    # Update centralized hedge symbol price and unrealized PnL
+                    try:
+                        hedge_symbol = self.config.HEDGE_CONFIG.hedge_symbol
+                        with self.manager_lock:
+                            central_data = trades_db.get_latest_strategy_data(hedge_symbol) or {}
+                            hedge_shares = central_data.get('position_shares', 0) or 0
+                            hedge_entry_price = central_data.get('entry_price', 0) or 0
+                        if hedge_shares > 0:
+                            hedge_price = self.broker.get_current_price(hedge_symbol)
+                            if hedge_price is not None:
+                                hedge_unrealized = (hedge_price - hedge_entry_price) * hedge_shares
+                                trades_db.update_strategy_data(hedge_symbol,
+                                    current_price=hedge_price,
+                                    unrealized_pnl=hedge_unrealized
+                                )
+                    except Exception as e:
+                        print(f"[Drawdown] Hedge update error: {e}")
                     
                     if total_pnl <= -threshold and not self.max_drawdown_triggered:
                         print(f"Max loss threshold of ${-threshold:,.0f} hit. Stopping all strategies.")
@@ -2159,9 +2397,46 @@ class StrategyManager:
             print(f"Strategy {i+1} completed")
         
         
+    def test_simple(self, stock_symbol="AAPL"):
+        """Simple test function to run strategy for one stock"""
+        print("=" * 80)
+        print(f"Testing Strategy for {stock_symbol}")
+        print("=" * 80)
+        
+        # Step 1: Initialize database for the stock
+        print(f"\n[Step 1] Initializing database for {stock_symbol}...")
+        trades_db.add_stocks_from_list([stock_symbol])
+        print(f"✓ Database initialized for {stock_symbol}")
+        
+        # Step 2: Create strategy instance
+        print(f"\n[Step 2] Creating Strategy instance for {stock_symbol}...")
+        strategy = Strategy(self, stock_symbol, self.broker, self.config)
+        print(f"✓ Strategy created for {stock_symbol}")
+        
+        # Step 3: Run the strategy
+        print(f"\n[Step 3] Running strategy for {stock_symbol}...")
+        print("=" * 80)
+        
+        try:
+            # Run the strategy (this will loop and monitor)
+            # Note: In TESTING mode, this will calculate indicators once and process
+            strategy.run(i=0)
+            print(f"\n✓ Strategy execution completed for {stock_symbol}")
+        except KeyboardInterrupt:
+            print(f"\n⚠ Strategy interrupted by user")
+        except Exception as e:
+            print(f"\n✗ Error running strategy: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print("=" * 80)
+        print(f"Test completed for {stock_symbol}")
+        print("=" * 80)
+    
     def test(self):
         print("=" * 80)
-        print("Testing TRIN-NYSE and TICK-NYSE Check Logic for AAPL")
+        print("Testing AAPL Position Opening with Hedges and Closing After 1 Minute")
+        print("(SIMULATED - Market is closed, using historical prices)")
         print("=" * 80)
         
         # Create a strategy for AAPL
@@ -2169,91 +2444,243 @@ class StrategyManager:
         strategy = Strategy(self, "AAPL", self.broker, self.config)
         print("✓ Strategy created")
         
-        # Test TRIN-NYSE data
-        print("\n" + "=" * 80)
-        print("[Step 2] Fetching TRIN-NYSE index data (1-min bars, 1 day)...")
-        print("=" * 80)
-        try:
-            trin_data = self.broker.get_historical_data_index(symbol="TRIN-NYSE", bar_size="1 min", duration="1 D")
-            if trin_data is not None and not trin_data.empty:
-                print(f"✓ TRIN-NYSE data fetched successfully!")
-                print(f"  Total Rows: {len(trin_data)}")
-                print(f"  Columns: {list(trin_data.columns)}")
-                print(f"\n  First 5 rows:")
-                print(f"{trin_data.head()}")
-                print(f"\n  Last 5 rows:")
-                print(f"{trin_data.tail()}")
-                
-                # Perform TRIN check
-                current_trin = trin_data['close'].iloc[-1]
-                trin_threshold = 1.1
-                trin_check = current_trin <= trin_threshold
-                
-                print(f"\n  TRIN CHECK:")
-                print(f"  - Current TRIN value: {current_trin:.3f}")
-                print(f"  - Threshold: <= {trin_threshold}")
-                print(f"  - Result: {'✓ PASSED' if trin_check else '✗ FAILED'} ({current_trin:.3f} {'<=' if trin_check else '>'} {trin_threshold})")
+        # Get current price for AAPL (for reference, may return None if market closed)
+        print("\n[Step 2] Getting reference price for AAPL...")
+        current_price = strategy.get_current_price_with_retry("AAPL")
+        if current_price is None:
+            # Try to get last price from historical data
+            print("  Market data unavailable, fetching last close from historical data...")
+            hist_data = strategy.get_historical_data_with_retry("AAPL", duration="1 D", bar_size="1 day")
+            if hist_data is not None and not hist_data.empty:
+                current_price = hist_data['close'].iloc[-1]
+                print(f"✓ Using last close price from historical data: ${current_price:.2f}")
             else:
-                print("✗ TRIN-NYSE data is None or empty")
-                trin_check = False
-        except Exception as e:
-            print(f"✗ Error fetching TRIN-NYSE: {e}")
-            traceback.print_exc()
-            trin_check = False
+                # Fallback: try 1-minute bars to get most recent price
+                hist_data = strategy.get_historical_data_with_retry("AAPL", duration="1 D", bar_size="1 min")
+                if hist_data is not None and not hist_data.empty:
+                    current_price = hist_data['close'].iloc[-1]
+                    print(f"✓ Using last price from 1-minute bars: ${current_price:.2f}")
+                else:
+                    print("✗ Unable to get any price data for AAPL")
+                    return
+        else:
+            print(f"✓ Current AAPL price: ${current_price:.2f}")
         
-        # Test TICK-NYSE data
-        print("\n" + "=" * 80)
-        print("[Step 3] Fetching TICK-NYSE index data (1-min bars, 1 day)...")
-        print("=" * 80)
-        try:
-            tick_data = self.broker.get_historical_data_index(symbol="TICK-NYSE", bar_size="1 min", duration="1 D")
-            if tick_data is not None and not tick_data.empty:
-                print(f"✓ TICK-NYSE data fetched successfully!")
-                print(f"  Total Rows: {len(tick_data)}")
-                print(f"  Columns: {list(tick_data.columns)}")
-                print(f"\n  First 5 rows:")
-                print(f"{tick_data.head()}")
-                print(f"\n  Last 5 rows:")
-                print(f"{tick_data.tail()}")
-                
-                # Perform TICK check
-                tick_ma = tick_data['close'].rolling(window=1).mean()
-                current_tick_ma = tick_ma.iloc[-1]
-                tick_threshold = 0
-                tick_check = current_tick_ma >= tick_threshold
-                
-                print(f"\n  TICK CHECK:")
-                print(f"  - Latest TICK value: {tick_data['close'].iloc[-1]:.0f}")
-                print(f"  - TICK 1-min MA: {current_tick_ma:.0f}")
-                print(f"  - Threshold: >= {tick_threshold}")
-                print(f"  - Result: {'✓ PASSED' if tick_check else '✗ FAILED'} ({current_tick_ma:.0f} {'>=' if tick_check else '<'} {tick_threshold})")
+        # Calculate position size manually (test only)
+        print("\n[Step 3] Calculating position size (test: $10k budget)...")
+        limit_price = current_price + 1
+        print(f"  - Limit Price: ${limit_price:.2f} (current price + $1)")
+        
+        # Calculate stop loss based on limit price
+        stop_loss_pct = strategy.calculate_stop_loss(limit_price)
+        stop_loss = limit_price * (1 - stop_loss_pct)
+        
+        # Calculate shares based on $10k budget
+        test_budget = 10000
+        shares = int(test_budget / limit_price)
+        
+        if shares <= 0:
+            print("✗ Unable to calculate valid position size")
+            return
+        
+        print(f"✓ Position size calculated:")
+        print(f"  - Budget: ${test_budget:,.2f}")
+        print(f"  - Limit Price: ${limit_price:.2f}")
+        print(f"  - Stop Loss: ${stop_loss:.2f} ({stop_loss_pct*100:.2f}%)")
+        print(f"  - Shares: {shares}")
+        print(f"  - Total Cost: ${shares * limit_price:.2f}")
+        
+        # SIMULATE: Open position at limit price (assuming order filled)
+        print("\n[Step 4] Simulating AAPL position opening...")
+        print("  [SIMULATED] Order would be placed at limit price")
+        fill_price = limit_price  # Simulate fill at limit price
+        fill_shares = shares
+        
+        print(f"✓ [SIMULATED] Position opened:")
+        print(f"  - Order ID: SIMULATED-{int(time.time())}")
+        print(f"  - Fill Price: ${fill_price:.2f} (limit price)")
+        print(f"  - Fill Shares: {fill_shares}")
+        
+        # Initialize position tracking
+        strategy.entry_price = fill_price
+        strategy.stop_loss_price = stop_loss
+        strategy.take_profit_price = fill_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])
+        strategy.position_shares = fill_shares
+        strategy.position_active = True
+        eastern_tz = pytz.timezone('US/Eastern')
+        strategy.entry_time = datetime.now(eastern_tz)
+        strategy.current_price = fill_price
+        strategy.used_capital = fill_shares * fill_price
+        
+        print(f"  - Entry Time: {strategy.entry_time}")
+        print(f"  - Stop Loss: ${strategy.stop_loss_price:.2f}")
+        print(f"  - Take Profit: ${strategy.take_profit_price:.2f}")
+        
+        # Update database
+        trades_db.update_strategy_data("AAPL",
+            position_active=True,
+            position_shares=fill_shares,
+            shares=fill_shares,
+            entry_price=fill_price,
+            stop_loss_price=stop_loss,
+            take_profit_price=strategy.take_profit_price,
+            entry_time=strategy.entry_time,
+            current_price=fill_price,
+            used_capital=strategy.used_capital
+        )
+        
+        # SIMULATE: Open hedge position
+        print("\n[Step 5] Simulating hedge position opening...")
+        # Use early hedge level from config
+        hedge_level = "early"
+        hedge_level_config = getattr(creds.HEDGE_CONFIG.hedge_levels, hedge_level)
+        hedge_beta = hedge_level_config.beta
+        hedge_equity_pct = hedge_level_config.equity_pct
+        
+        # Get hedge symbol price for simulation
+        hedge_symbol = strategy.hedge_symbol
+        hedge_price = strategy.get_current_price_with_retry(hedge_symbol)
+        if hedge_price is None:
+            # Try historical data
+            hedge_hist = strategy.get_historical_data_with_retry(hedge_symbol, duration="1 D", bar_size="1 day")
+            if hedge_hist is not None and not hedge_hist.empty:
+                hedge_price = hedge_hist['close'].iloc[-1]
             else:
-                print("✗ TICK-NYSE data is None or empty")
-                tick_check = False
-        except Exception as e:
-            print(f"✗ Error fetching TICK-NYSE: {e}")
-            traceback.print_exc()
-            tick_check = False
+                hedge_hist = strategy.get_historical_data_with_retry(hedge_symbol, duration="1 D", bar_size="1 min")
+                if hedge_hist is not None and not hedge_hist.empty:
+                    hedge_price = hedge_hist['close'].iloc[-1]
+                else:
+                    print(f"✗ Unable to get price for {hedge_symbol}, skipping hedge")
+                    hedge_price = None
         
-        # Combined result
-        print("\n" + "=" * 80)
-        print("[Step 4] Combined TRIN/TICK Check Result")
-        print("=" * 80)
-        print(f"  TRIN Check: {'✓ PASSED' if trin_check else '✗ FAILED'}")
-        print(f"  TICK Check: {'✓ PASSED' if tick_check else '✗ FAILED'}")
-        print(f"  Overall: {'✓ BOTH PASSED' if (trin_check and tick_check) else '✗ AT LEAST ONE FAILED'}")
+        if hedge_price:
+            # Simulate hedge execution
+            account_equity = creds.EQUITY
+            hedge_amount = account_equity * hedge_equity_pct
+            hedge_shares = int(hedge_amount / hedge_price)
+            
+            print(f"  [SIMULATED] Hedge order would be placed")
+            print(f"✓ [SIMULATED] Hedge opened:")
+            print(f"  - Hedge Symbol: {hedge_symbol}")
+            print(f"  - Hedge Shares: {hedge_shares}")
+            print(f"  - Hedge Entry Price: ${hedge_price:.2f}")
+            print(f"  - Hedge Level: {hedge_level}")
+            
+            # Update hedge status
+            strategy.hedge_active = True
+            strategy.hedge_shares = hedge_shares
+            strategy.hedge_level = hedge_level
+            strategy.hedge_entry_price = hedge_price
+            
+            # Update database with hedge information
+            trades_db.update_strategy_data("AAPL",
+                hedge_active=True,
+                hedge_shares=hedge_shares,
+                hedge_symbol=hedge_symbol,
+                hedge_level=hedge_level,
+                hedge_beta=hedge_beta,
+                hedge_entry_price=hedge_price,
+                hedge_entry_time=datetime.now(eastern_tz)
+            )
+        else:
+            print("✗ Hedge opening skipped (no price data)")
         
-        # Test using the actual strategy method
-        print("\n" + "=" * 80)
-        print("[Step 5] Testing strategy._check_trin_tick_conditions() method")
-        print("=" * 80)
-        try:
-            result = strategy._check_trin_tick_conditions()
-            print(f"  Method returned: {result}")
-            print(f"  Result: {'✓ PASSED' if result else '✗ FAILED'}")
-        except Exception as e:
-            print(f"  ✗ Error calling _check_trin_tick_conditions: {e}")
-            traceback.print_exc()
+        # Wait 1 minute
+        print("\n[Step 6] Waiting 1 minute before closing position...")
+        print("  Waiting 60 seconds...")
+        time.sleep(60)
+        print("✓ 1 minute elapsed")
+        
+        # Get exit price (last live market price)
+        print("\n[Step 7] Getting exit price (last live market price)...")
+        exit_price = strategy.get_current_price_with_retry("AAPL")
+        if exit_price is None:
+            # Use historical data to get last price
+            hist_data = strategy.get_historical_data_with_retry("AAPL", duration="1 D", bar_size="1 min")
+            if hist_data is not None and not hist_data.empty:
+                exit_price = hist_data['close'].iloc[-1]
+                print(f"✓ Using last price from historical data: ${exit_price:.2f}")
+            else:
+                # Fallback to entry price if we can't get exit price
+                exit_price = fill_price
+                print(f"⚠ Unable to get exit price, using entry price: ${exit_price:.2f}")
+        else:
+            print(f"✓ Exit price: ${exit_price:.2f}")
+        
+        # SIMULATE: Close hedge first
+        print("\n[Step 8] Simulating hedge position closing...")
+        if strategy.hedge_active:
+            # Get hedge exit price
+            hedge_exit_price = strategy.get_current_price_with_retry(hedge_symbol)
+            if hedge_exit_price is None:
+                hedge_hist = strategy.get_historical_data_with_retry(hedge_symbol, duration="1 D", bar_size="1 min")
+                if hedge_hist is not None and not hedge_hist.empty:
+                    hedge_exit_price = hedge_hist['close'].iloc[-1]
+                else:
+                    hedge_exit_price = strategy.hedge_entry_price
+            
+            hedge_pnl = (hedge_exit_price - strategy.hedge_entry_price) * strategy.hedge_shares
+            print(f"  [SIMULATED] Hedge sell order would be placed")
+            print(f"✓ [SIMULATED] Hedge closed:")
+            print(f"  - Exit Price: ${hedge_exit_price:.2f}")
+            print(f"  - Hedge P&L: ${hedge_pnl:.2f}")
+            
+            # Update hedge status
+            strategy.hedge_active = False
+            shares_to_sell = strategy.hedge_shares
+            strategy.hedge_shares = 0
+            
+            # Update database
+            trades_db.update_strategy_data("AAPL",
+                hedge_active=False,
+                hedge_shares=0,
+                hedge_exit_price=hedge_exit_price,
+                hedge_exit_time=datetime.now(eastern_tz),
+                hedge_pnl=hedge_pnl
+            )
+        else:
+            print("  No active hedge to close")
+        
+        # SIMULATE: Close position
+        print("\n[Step 9] Simulating AAPL position closing...")
+        if strategy.position_active and strategy.position_shares > 0:
+            print(f"  [SIMULATED] Sell order would be placed at market")
+            print(f"✓ [SIMULATED] Position closed:")
+            print(f"  - Exit Price: ${exit_price:.2f}")
+            
+            # Calculate PnL
+            realized_pnl = (exit_price - strategy.entry_price) * strategy.position_shares
+            print(f"  - Realized P&L: ${realized_pnl:.2f}")
+            print(f"  - Entry Price: ${strategy.entry_price:.2f}")
+            print(f"  - Exit Price: ${exit_price:.2f}")
+            print(f"  - Shares: {strategy.position_shares}")
+            
+            # Update capital tracking
+            with self.manager_lock:
+                self.available_capital += exit_price * strategy.position_shares
+                original_cost = strategy.entry_price * strategy.position_shares
+                self.used_capital -= original_cost
+                strategy.used_capital -= original_cost
+                print(f"  - Available Capital after closing: ${self.available_capital:.2f}")
+                print(f"  - Used Capital after closing: ${self.used_capital:.2f}")
+            
+            # Update position tracking
+            strategy.position_active = False
+            strategy.position_shares = 0
+            strategy.realized_pnl += realized_pnl
+            
+            # Update database
+            trades_db.update_strategy_data("AAPL",
+                position_active=False,
+                position_shares=0,
+                current_price=exit_price,
+                unrealized_pnl=0,
+                realized_pnl=strategy.realized_pnl,
+                close_time=datetime.now(eastern_tz),
+                used_capital=0
+            )
+        else:
+            print("  No active position to close")
         
         print("\n" + "=" * 80)
         print("Test complete!")
@@ -2284,9 +2711,10 @@ class StrategyManager:
                         print(f"   {k}: {v}")
             print()
             
+
 if __name__ == "__main__":
     print("Caching ADV and RVOL data...")
-    initialize_stock_selector()
+    # initialize_stock_selector()
     print("ADV and RVOL data cached")
 
     print("Checking for existing database to backup...")
@@ -2295,4 +2723,3 @@ if __name__ == "__main__":
     manager = StrategyManager()
     manager.run()
     print("STOPPING MANAGER")
-    

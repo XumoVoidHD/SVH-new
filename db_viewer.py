@@ -23,6 +23,50 @@ st.title("SVH Capital - Dashboard")
 st.markdown("Configuration editor and database viewer for your trading system")
 st.markdown("---")
 
+# Valid bar sizes matching main.py
+VALID_BAR_SIZES = [
+    '1 secs', '5 secs', '10 secs', '15 secs', '30 secs',
+    '1 min', '2 mins', '3 mins', '5 mins', '10 mins', '15 mins', '20 mins', '30 mins',
+    '1 hour', '2 hours', '3 hours', '4 hours', '8 hours',
+    '1 day', '1W', '1M'
+]
+
+def normalize_timeframe(tf):
+    """Convert old timeframe format (e.g., '3min') to valid format (e.g., '3 mins')"""
+    if not tf:
+        return None
+    tf_str = str(tf)
+    
+    # If already in valid format, return as-is
+    if tf_str in VALID_BAR_SIZES:
+        return tf_str
+    
+    # Convert old formats
+    if tf_str.endswith('min') and not tf_str.endswith('mins'):
+        if tf_str == '1min':
+            return '1 min'
+        else:
+            return tf_str.replace('min', ' mins')
+    elif tf_str.endswith('hour'):
+        return tf_str.replace('hour', ' hour')
+    elif tf_str in ['1day', '1 day']:
+        return '1 day'
+    elif tf_str.upper() in ['1W', '1WEEK', '1WEEKS']:
+        return '1W'
+    elif tf_str.upper() in ['1M', '1MONTH', '1MONTHS']:
+        return '1M'
+    
+    # If we can't convert, return original and let validation handle it
+    return tf_str
+
+def normalize_timeframe_list(timeframes):
+    """Convert list of old timeframe formats to valid formats"""
+    if not timeframes:
+        return []
+    normalized = [normalize_timeframe(tf) for tf in timeframes]
+    # Filter to only include valid ones
+    return [tf for tf in normalized if tf in VALID_BAR_SIZES]
+
 # Function to load configuration from creds.json
 def load_config():
     """Load configuration from creds.json file"""
@@ -50,12 +94,12 @@ def load_config():
                     "top_sectors_count": 3
                 },
                 "INDICATORS": {
-                    "vwap": {"timeframes": ["3min"], "params": {}},
-                    "ema1": {"timeframes": ["5min"], "params": {"length": 5}},
-                    "ema2": {"timeframes": ["20min"], "params": {"length": 20}},
-                    "macd": {"timeframes": ["3min"], "params": {"fast": 12, "slow": 26, "signal": 9}},
-                    "adx": {"timeframes": ["3min"], "params": {"length": 14}},
-                    "volume_avg": {"timeframes": ["3min"], "params": {"window": 20}}
+                    "vwap": {"timeframes": ["3 mins"], "params": {}},
+                    "ema1": {"timeframes": ["5 mins"], "params": {"length": 5}},
+                    "ema2": {"timeframes": ["20 mins"], "params": {"length": 20}},
+                    "macd": {"timeframes": ["3 mins"], "params": {"fast": 12, "slow": 26, "signal": 9}},
+                    "adx": {"timeframes": ["3 mins"], "params": {"length": 14}},
+                    "volume_avg": {"timeframes": ["3 mins"], "params": {"window": 20}}
                 },
                 "RISK_CONFIG": {
                     "alpha_score_threshold": 85,
@@ -335,8 +379,18 @@ def main():
                     total_combined_pnl = total_unrealized_pnl + total_realized_pnl
                     active_positions = len(active_df)
                     
-                    # Display PnL metrics in a single row with 5 columns
-                    col1, col2, col3, col4, col5 = st.columns(5)
+                    # Get equity for calculations
+                    equity = config.get('EQUITY', 0)
+                    
+                    # Calculate total used capital
+                    if 'used_capital' in active_df.columns:
+                        total_used_capital = active_df['used_capital'].sum()
+                    else:
+                        total_used_capital = 0
+                    
+                    # ===== PROFITABILITY METRICS =====
+                    st.markdown("### Profitability Metrics")
+                    col1, col2, col3, col4, col5, col6 = st.columns(6)
                     
                     with col1:
                         st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
@@ -348,26 +402,69 @@ def main():
                         st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
                     
                     with col4:
-                        st.metric("Active Positions", active_positions)
+                        # Average PnL per Trade (only count trades with shares > 0)
+                        if 'shares' in df.columns:
+                            executed_trades = df[df['shares'] > 0]
+                            total_trades = len(executed_trades)
+                        else:
+                            total_trades = len(df)
+                        if total_trades > 0:
+                            avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
+                            st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
+                        else:
+                            st.metric("Avg PnL/Trade", "$0.00")
                     
                     with col5:
-                        # Trades Executed = count of trades where shares > 0
-                        if 'shares' in df.columns:
-                            trades_executed = len(df[df['shares'] > 0])
-                            st.metric("Trades Executed", trades_executed)
+                        # Profit Factor = gross profit / gross loss
+                        gross_profit = df[df['realized_pnl'] > 0]['realized_pnl'].sum()
+                        gross_loss = abs(df[df['realized_pnl'] < 0]['realized_pnl'].sum())
+                        if gross_loss > 0:
+                            profit_factor = gross_profit / gross_loss
+                            st.metric("Profit Factor", f"{profit_factor:.2f}")
                         else:
-                            st.metric("Trades Executed", 0)
+                            st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
                     
-                    # Additional metrics in a separate row
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    with col1:
-                        if 'used_capital' in active_df.columns:
-                            total_used_capital = active_df['used_capital'].sum()
-                            st.metric("Total Capital Deployed", f"${total_used_capital:,.2f}")
+                    with col6:
+                        # Win Rate % = (profitable closed positions / total closed positions) * 100
+                        # Closed positions are those where position_shares = 0
+                        closed_positions = df[df['position_shares'] == 0] if 'position_shares' in df.columns else pd.DataFrame()
+                        if len(closed_positions) > 0:
+                            profitable_closed = len(closed_positions[closed_positions['realized_pnl'] > 0])
+                            losing_closed = len(closed_positions[closed_positions['realized_pnl'] < 0])
+                            total_closed = profitable_closed + losing_closed
+                            if total_closed > 0:
+                                win_rate = (profitable_closed / total_closed) * 100
+                                st.metric("Win Rate %", f"{win_rate:.2f}%")
+                            else:
+                                st.metric("Win Rate %", "N/A")
                         else:
-                            total_used_capital = 0
+                            st.metric("Win Rate %", "N/A")
+                    
+                    # ===== CAPITAL & EXPOSURE METRICS =====
+                    st.markdown("### Capital & Exposure Metrics")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Current Exposure", f"${total_used_capital:,.2f}")
                     
                     with col2:
+                        # Total Portfolio Value = used_capital + unrealized_pnl
+                        total_portfolio_value = total_used_capital + total_unrealized_pnl
+                        st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
+                    
+                    with col3:
+                        # Available Cash = EQUITY - used_capital
+                        available_cash = equity - total_used_capital
+                        st.metric("Cash Available", f"${available_cash:,.2f}")
+                    
+                    with col4:
+                        st.metric("Active Positions", active_positions)
+                    
+                    # ===== EFFICIENCY & EXECUTION METRICS =====
+                    st.markdown("### Efficiency & Execution Metrics")
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
                         # Calculate total cost basis (sum of all positions)
                         total_cost_basis = (df['shares'] * df['entry_price']).sum()
                         if total_cost_basis > 0:
@@ -377,21 +474,26 @@ def main():
                         else:
                             st.metric("Intraday Return %", "0.00%")
                     
+                    with col2:
+                        # Avg Trade Size = total_used_capital / number of active positions
+                        if active_positions > 0:
+                            avg_trade_size = total_used_capital / active_positions
+                            st.metric("Avg Trade Size", f"${avg_trade_size:,.2f}")
+                        else:
+                            st.metric("Avg Trade Size", "$0.00")
+                    
                     with col3:
-                        # Total Portfolio Value = used_capital + unrealized_pnl
-                        total_portfolio_value = total_used_capital + total_unrealized_pnl
-                        st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
+                        # Trades Executed = count of trades where shares > 0
+                        if 'shares' in df.columns:
+                            trades_executed = len(df[df['shares'] > 0])
+                            st.metric("Trades Executed", trades_executed)
+                        else:
+                            st.metric("Trades Executed", 0)
                     
                     with col4:
-                        # Available Cash = EQUITY - used_capital
-                        equity = config.get('EQUITY', 0)
-                        available_cash = equity - total_used_capital
-                        st.metric("Cash Available", f"${available_cash:,.2f}")
-                    
-                    with col5:
                         # Average Trade Duration (for closed positions)
                         if 'entry_time' in df.columns and 'close_time' in df.columns:
-                            # Filter for closed positions with valid times
+                            # Filter for closed positions with valid times (including SPXU and SQQQ)
                             closed_with_times = df[(df['position_shares'] == 0) & 
                                                    (df['entry_time'].notna()) & 
                                                    (df['close_time'].notna())].copy()
@@ -422,60 +524,6 @@ def main():
                                 st.metric("Avg Trade Duration", "N/A")
                         else:
                             st.metric("Avg Trade Duration", "N/A")
-                    
-                    # Trading statistics in a third row
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    
-                    with col1:
-                        # Exposure Ratio = (total_used_capital / equity) * 100
-                        if equity > 0:
-                            exposure_ratio = (total_used_capital / equity) * 100
-                            st.metric("Exposure Ratio", f"{exposure_ratio:.2f}%")
-                        else:
-                            st.metric("Exposure Ratio", "0.00%")
-                    
-                    with col2:
-                        # Avg Position Size = total_used_capital / number of active positions
-                        if active_positions > 0:
-                            avg_position_size = total_used_capital / active_positions
-                            st.metric("Avg Position Size", f"${avg_position_size:,.2f}")
-                        else:
-                            st.metric("Avg Position Size", "$0.00")
-                    
-                    with col3:
-                        # Win Rate % = (profitable closed positions / total closed positions) * 100
-                        # Closed positions are those where position_shares = 0
-                        closed_positions = df[df['position_shares'] == 0] if 'position_shares' in df.columns else pd.DataFrame()
-                        if len(closed_positions) > 0:
-                            profitable_closed = len(closed_positions[closed_positions['realized_pnl'] > 0])
-                            losing_closed = len(closed_positions[closed_positions['realized_pnl'] < 0])
-                            total_closed = profitable_closed + losing_closed
-                            if total_closed > 0:
-                                win_rate = (profitable_closed / total_closed) * 100
-                                st.metric("Win Rate %", f"{win_rate:.2f}%")
-                            else:
-                                st.metric("Win Rate %", "N/A")
-                        else:
-                            st.metric("Win Rate %", "N/A")
-                    
-                    with col4:
-                        # Profit Factor = gross profit / gross loss
-                        gross_profit = df[df['realized_pnl'] > 0]['realized_pnl'].sum()
-                        gross_loss = abs(df[df['realized_pnl'] < 0]['realized_pnl'].sum())
-                        if gross_loss > 0:
-                            profit_factor = gross_profit / gross_loss
-                            st.metric("Profit Factor", f"{profit_factor:.2f}")
-                        else:
-                            st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
-                    
-                    with col5:
-                        # Average PnL per Trade
-                        total_trades = len(df)
-                        if total_trades > 0:
-                            avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
-                            st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
-                        else:
-                            st.metric("Avg PnL/Trade", "$0.00")
                     
                     st.markdown("---")
                 
@@ -900,8 +948,12 @@ def main():
                             st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
                     
                     with col5:
-                        # Average PnL per Trade
-                        total_trades = len(df)
+                        # Average PnL per Trade (only count trades with shares > 0)
+                        if 'shares' in df.columns:
+                            executed_trades = df[df['shares'] > 0]
+                            total_trades = len(executed_trades)
+                        else:
+                            total_trades = len(df)
                         if total_trades > 0:
                             avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
                             st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
@@ -1041,9 +1093,14 @@ def main():
                             st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
                     
                     with col3:
-                        # Average PnL per Trade
-                        if len(df) > 0:
-                            avg_pnl_per_trade = total_pnl / len(df)
+                        # Average PnL per Trade (only count trades with shares > 0)
+                        if 'shares' in df.columns:
+                            executed_trades = df[df['shares'] > 0]
+                            total_trades = len(executed_trades)
+                        else:
+                            total_trades = len(df)
+                        if total_trades > 0:
+                            avg_pnl_per_trade = total_pnl / total_trades
                             st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
                         else:
                             st.metric("Avg PnL/Trade", "$0.00")
@@ -1308,9 +1365,14 @@ def main():
                                 st.metric("Avg Loss", "$0.00")
                         
                         with col3:
-                            # Average PnL per Trade
-                            if len(symbol_data) > 0:
-                                avg_pnl_per_trade = total_realized_pnl / len(symbol_data)
+                            # Average PnL per Trade (only count trades with shares > 0)
+                            if 'shares' in symbol_data.columns:
+                                executed_trades = symbol_data[symbol_data['shares'] > 0]
+                                total_trades = len(executed_trades)
+                            else:
+                                total_trades = len(symbol_data)
+                            if total_trades > 0:
+                                avg_pnl_per_trade = total_realized_pnl / total_trades
                                 st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
                             else:
                                 st.metric("Avg PnL/Trade", "$0.00")
@@ -1618,9 +1680,14 @@ def main():
                                         st.metric("Avg Loss", "$0.00")
                                 
                                 with col3:
-                                    # Average PnL per Trade
-                                    if len(df) > 0:
-                                        avg_pnl_per_trade = total_realized_pnl / len(df)
+                                    # Average PnL per Trade (only count trades with shares > 0)
+                                    if 'shares' in df.columns:
+                                        executed_trades = df[df['shares'] > 0]
+                                        total_trades = len(executed_trades)
+                                    else:
+                                        total_trades = len(df)
+                                    if total_trades > 0:
+                                        avg_pnl_per_trade = total_realized_pnl / total_trades
                                         st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
                                     else:
                                         st.metric("Avg PnL/Trade", "$0.00")
@@ -1639,7 +1706,7 @@ def main():
                                 with col2:
                                     # Average Trade Duration (for closed positions)
                                     if 'entry_time' in df.columns and 'close_time' in df.columns:
-                                        # Filter for closed positions with valid times
+                                        # Filter for closed positions with valid times (including SPXU and SQQQ)
                                         closed_with_times = df[(df['position_shares'] == 0) & 
                                                                (df['entry_time'].notna()) & 
                                                                (df['close_time'].notna())].copy()
@@ -1676,12 +1743,18 @@ def main():
                                 # Add filter options in a single row
                                 col1, col2, col3 = st.columns(3)
                                 with col1:
-                                    qualified_stocks_only_hist_simp = st.checkbox("Qualified Stocks", value=False, key="qualified_stocks_only_hist_simp")
+                                    show_live_only_hist_simp = st.checkbox("Live position", value=False, key="show_live_positions_hist_simp")
                                 with col2:
+                                    qualified_stocks_only_hist_simp = st.checkbox("Qualified Stocks", value=False, key="qualified_stocks_only_hist_simp")
+                                with col3:
                                     executed_trades_only_hist_simp = st.checkbox("Executed Trades", value=False, key="executed_trades_only_hist_simp")
                                 
                                 # Apply filters to display dataframe only (not affecting metrics)
                                 simplified_df = df.copy()
+                                
+                                if show_live_only_hist_simp:
+                                    if 'position_active' in simplified_df.columns:
+                                        simplified_df = simplified_df[simplified_df['position_active'] == True]
                                 
                                 if qualified_stocks_only_hist_simp:
                                     if 'shares' in simplified_df.columns:
@@ -1694,42 +1767,54 @@ def main():
                                 simplified_df = simplified_df.copy()
                                 
                                 if not simplified_df.empty:
-                                    # Create simplified display format (same as Top Performing Symbols)
+                                    # Create simplified DataFrame with calculated columns (same format as main Database Viewer)
                                     simplified_display = pd.DataFrame({
                                         'Symbol': simplified_df['symbol'],
-                                        'Quantity': simplified_df['shares'],
+                                        'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
+                                        'Actual Quantity': simplified_df['position_shares'] if 'position_shares' in simplified_df.columns else simplified_df['shares'],
+                                        'Initial Quantity': simplified_df['shares'],
                                         'Entry Price': simplified_df['entry_price'],
-                                        'Exit Price': simplified_df['current_price'],
+                                        'Current Price': simplified_df['current_price'],
                                         'Unrealized PnL': simplified_df['unrealized_pnl'],
                                         'Realized PnL': simplified_df['realized_pnl'],
+                                        'Score': simplified_df['score'] if 'score' in simplified_df.columns else 0,
                                         'Entry Time': simplified_df['entry_time'] if 'entry_time' in simplified_df.columns else 'N/A',
                                         'Close Time': simplified_df['close_time'] if 'close_time' in simplified_df.columns else 'N/A'
                                     })
                                     
                                     # Ensure numeric types for calculations
-                                    simplified_display['Quantity'] = pd.to_numeric(simplified_display['Quantity'], errors='coerce').fillna(0)
-                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce').fillna(0)
-                                    simplified_display['Exit Price'] = pd.to_numeric(simplified_display['Exit Price'], errors='coerce').fillna(0)
-                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce').fillna(0)
-                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce').fillna(0)
+                                    simplified_display['Actual Quantity'] = pd.to_numeric(simplified_display['Actual Quantity'], errors='coerce')
+                                    simplified_display['Initial Quantity'] = pd.to_numeric(simplified_display['Initial Quantity'], errors='coerce')
+                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
+                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
+                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
+                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
                                     
-                                    # Calculate additional columns
-                                    simplified_display['Cost Basis'] = simplified_display['Quantity'] * simplified_display['Entry Price']
-                                    simplified_display['Market Value'] = simplified_display['Quantity'] * simplified_display['Exit Price']
+                                    # Calculate additional columns using Actual Quantity
+                                    simplified_display['Cost Basis'] = simplified_display['Initial Quantity'] * simplified_display['Entry Price']
+                                    simplified_display['Market Value'] = simplified_display['Actual Quantity'] * simplified_display['Current Price']
                                     
-                                    # Calculate total PnL (unrealized + realized)
-                                    total_pnl = simplified_display['Unrealized PnL'] + simplified_display['Realized PnL']
+                                    # Calculate PnL from raw database fields (same as raw database view)
+                                    calculated_unrealized_pnl = simplified_display['Actual Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
+                                    calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
+                                    
+                                    # Use calculated unrealized PnL + stored realized PnL
+                                    total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
                                     simplified_display['PnL ($)'] = total_pnl
                                     
-                                    # Calculate percentage based on total PnL relative to cost basis (handle division by zero)
-                                    simplified_display['PnL (%)'] = simplified_display.apply(
-                                        lambda row: (row['PnL ($)'] / row['Cost Basis'] * 100) if row['Cost Basis'] != 0 else 0, 
-                                        axis=1
-                                    ).round(2)
+                                    # Calculate percentage based on total PnL relative to cost basis
+                                    simplified_display['PnL (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                                    simplified_display['PnL (%)'] = simplified_display['PnL (%)'].fillna(0)
                                     
-                                    # Select and reorder columns for display (same as Top Performing Symbols)
+                                    # Rename columns for display
+                                    simplified_display = simplified_display.rename(columns={
+                                        'Actual Quantity': 'Actual Qty',
+                                        'Initial Quantity': 'Initial Qty'
+                                    })
+                                    
+                                    # Select and reorder columns for display
                                     display_columns = [
-                                        'Symbol', 'Quantity', 'Entry Price', 'Exit Price',
+                                        'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
                                         'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
                                     ]
                                     simplified_display = simplified_display[display_columns]
@@ -1745,6 +1830,16 @@ def main():
                                             return "0.00%"
                                         return f"{value:.2f}%"
                                     
+                                    # Apply formatting to the display dataframe
+                                    formatted_display = simplified_display.copy()
+                                    formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
+                                    formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
+                                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                                    formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
+                                    formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
+                                    
+                                    # Format time columns to show only HH:MM:SS
                                     def format_time(time_value):
                                         if pd.isna(time_value) or time_value == 'N/A' or str(time_value) in ['None', 'nan', '']:
                                             return 'N/A'
@@ -1755,30 +1850,22 @@ def main():
                                         except:
                                             return 'N/A'
                                     
-                                    # Apply formatting to the display dataframe
-                                    formatted_display = simplified_display.copy()
-                                    formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
-                                    formatted_display['Exit Price'] = formatted_display['Exit Price'].apply(format_currency)
-                                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
-                                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
-                                    formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
-                                    formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
                                     formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
                                     formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
                                     
                                     # Display the formatted table
                                     st.dataframe(formatted_display, use_container_width=True)
+                                    
+                                    # Download button for calculated data (before formatting, so numbers are preserved)
+                                    csv_data = simplified_display.to_csv(index=False)
+                                    st.download_button(
+                                        label="Download Simplified Data",
+                                        data=csv_data,
+                                        file_name=f"simplified_{selected_file['filename'].replace('.db', '.csv')}",
+                                        mime="text/csv"
+                                    )
                                 else:
-                                    st.info("No active positions found in the database.")
-                                
-                                # Download simplified data
-                                csv_data = simplified_df.to_csv(index=False)
-                                st.download_button(
-                                    label="Download Simplified Data",
-                                    data=csv_data,
-                                    file_name=f"simplified_{selected_file['filename'].replace('.db', '.csv')}",
-                                    mime="text/csv"
-                                )
+                                    st.info("No trades found matching the filter criteria.")
                                 
                             
                             else:  # Raw Database
@@ -1857,9 +1944,14 @@ def main():
                                         st.metric("Avg Loss", "$0.00")
                                 
                                 with col3:
-                                    # Average PnL per Trade
-                                    if len(df) > 0:
-                                        avg_pnl_per_trade = total_realized_pnl / len(df)
+                                    # Average PnL per Trade (only count trades with shares > 0)
+                                    if 'shares' in df.columns:
+                                        executed_trades = df[df['shares'] > 0]
+                                        total_trades = len(executed_trades)
+                                    else:
+                                        total_trades = len(df)
+                                    if total_trades > 0:
+                                        avg_pnl_per_trade = total_realized_pnl / total_trades
                                         st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
                                     else:
                                         st.metric("Avg PnL/Trade", "$0.00")
@@ -1878,7 +1970,7 @@ def main():
                                 with col2:
                                     # Average Trade Duration (for closed positions)
                                     if 'entry_time' in df.columns and 'close_time' in df.columns:
-                                        # Filter for closed positions with valid times
+                                        # Filter for closed positions with valid times (including SPXU and SQQQ)
                                         closed_with_times = df[(df['position_shares'] == 0) & 
                                                                (df['entry_time'].notna()) & 
                                                                (df['close_time'].notna())].copy()
@@ -1938,23 +2030,106 @@ def main():
                                 
                                 df_display = df_display.copy()
                                 
-                                # Convert datetime columns to strings to avoid Arrow conversion issues
-                                datetime_columns = ['entry_time', 'close_time', 'trailing_exit_start_time', 'hedge_entry_time']
-                                for col in datetime_columns:
-                                    if col in df_display.columns:
-                                        df_display[col] = df_display[col].astype(str)
+                                if not df_display.empty:
+                                    # Create simplified DataFrame with calculated columns (same format as main Database Viewer)
+                                    simplified_display = pd.DataFrame({
+                                        'Symbol': df_display['symbol'],
+                                        'Active': df_display['position_active'] if 'position_active' in df_display.columns else True,
+                                        'Actual Quantity': df_display['position_shares'] if 'position_shares' in df_display.columns else df_display['shares'],
+                                        'Initial Quantity': df_display['shares'],
+                                        'Entry Price': df_display['entry_price'],
+                                        'Current Price': df_display['current_price'],
+                                        'Unrealized PnL': df_display['unrealized_pnl'],
+                                        'Realized PnL': df_display['realized_pnl'],
+                                        'Score': df_display['score'] if 'score' in df_display.columns else 0,
+                                        'Entry Time': df_display['entry_time'] if 'entry_time' in df_display.columns else 'N/A',
+                                        'Close Time': df_display['close_time'] if 'close_time' in df_display.columns else 'N/A'
+                                    })
+                                    
+                                    # Ensure numeric types for calculations
+                                    simplified_display['Actual Quantity'] = pd.to_numeric(simplified_display['Actual Quantity'], errors='coerce')
+                                    simplified_display['Initial Quantity'] = pd.to_numeric(simplified_display['Initial Quantity'], errors='coerce')
+                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
+                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
+                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
+                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
+                                    
+                                    # Calculate additional columns using Actual Quantity
+                                    simplified_display['Cost Basis'] = simplified_display['Initial Quantity'] * simplified_display['Entry Price']
+                                    simplified_display['Market Value'] = simplified_display['Actual Quantity'] * simplified_display['Current Price']
+                                    
+                                    # Calculate PnL from raw database fields (same as raw database view)
+                                    calculated_unrealized_pnl = simplified_display['Actual Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
+                                    calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
+                                    
+                                    # Use calculated unrealized PnL + stored realized PnL
+                                    total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
+                                    simplified_display['PnL ($)'] = total_pnl
+                                    
+                                    # Calculate percentage based on total PnL relative to cost basis
+                                    simplified_display['PnL (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                                    simplified_display['PnL (%)'] = simplified_display['PnL (%)'].fillna(0)
+                                    
+                                    # Rename columns for display
+                                    simplified_display = simplified_display.rename(columns={
+                                        'Actual Quantity': 'Actual Qty',
+                                        'Initial Quantity': 'Initial Qty'
+                                    })
+                                    
+                                    # Select and reorder columns for display
+                                    display_columns = [
+                                        'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
+                                        'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
+                                    ]
+                                    simplified_display = simplified_display[display_columns]
+                                    
+                                    # Format the data with commas and dollar signs
+                                    def format_currency(value):
+                                        if pd.isna(value):
+                                            return "$0.00"
+                                        return f"${value:,.2f}"
+                                    
+                                    def format_percentage(value):
+                                        if pd.isna(value):
+                                            return "0.00%"
+                                        return f"{value:.2f}%"
+                                    
+                                    # Apply formatting to the display dataframe
+                                    formatted_display = simplified_display.copy()
+                                    formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
+                                    formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
+                                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                                    formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
+                                    formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
                                 
-                                # Show all columns
-                                st.dataframe(df_display, use_container_width=True)
-                                
-                                # Download raw data
-                                csv_data = df.to_csv(index=False)
-                                st.download_button(
-                                    label="Download Raw Data",
-                                    data=csv_data,
-                                    file_name=f"raw_{selected_file['filename'].replace('.db', '.csv')}",
-                                    mime="text/csv"
-                                )
+                                    # Format time columns to show only HH:MM:SS
+                                    def format_time(time_value):
+                                        if pd.isna(time_value) or time_value == 'N/A' or str(time_value) in ['None', 'nan', '']:
+                                            return 'N/A'
+                                        try:
+                                            # Try to parse as datetime and extract time
+                                            time_obj = pd.to_datetime(time_value)
+                                            return time_obj.strftime('%H:%M:%S')
+                                        except:
+                                            return 'N/A'
+                                    
+                                    formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
+                                    formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
+                                    
+                                    # Display the formatted table
+                                    st.dataframe(formatted_display, use_container_width=True)
+                                    
+                                    # Download button for calculated data (before formatting, so numbers are preserved)
+                                    csv_data = simplified_display.to_csv(index=False)
+                                    st.download_button(
+                                        label="Download Data as CSV",
+                                        data=csv_data,
+                                        file_name=f"raw_{selected_file['filename'].replace('.db', '.csv')}",
+                                        mime="text/csv"
+                                    )
+                                else:
+                                    st.info("No trades found matching the filter criteria.")
                         else:
                             st.error("Failed to load data from selected file")
                 else:
@@ -1964,7 +2139,7 @@ def main():
         # Create tabs for different config sections
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "Stock Selection", "Entry Rules", "Risk Management", "Drawdown Limits",
-            "Stop Loss & Profit", "Hedge & Leverage", "Trading Hours"
+            "Stop Loss & Profit", "Hedge", "Trading Hours"
         ])
         
         with tab1:
@@ -2113,8 +2288,9 @@ def main():
             st.write("VWAP Settings")
             col1, col2 = st.columns(2)
             with col1:
-                vwap_timeframes = st.multiselect("VWAP Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('vwap', {}).get('timeframes', ["3min"]), key="vwap_timeframes")
+                default_vwap = normalize_timeframe_list(indicators_config.get('vwap', {}).get('timeframes', ["3 mins"]))
+                vwap_timeframes = st.multiselect("VWAP Timeframes:", VALID_BAR_SIZES,
+                    default=default_vwap if default_vwap else ["3 mins"], key="vwap_timeframes")
             with col2:
                 vwap_below_price = st.checkbox("VWAP Should Be Below Price", value=config.get('VWAP_SHOULD_BE_BELOW_PRICE', True), key="vwap_below_price_global")
             
@@ -2123,12 +2299,14 @@ def main():
             col1, col2, col3 = st.columns(3)
             with col1:
                 ema1_length = st.number_input("EMA1 Length (Fast):", 1, 100, indicators_config.get('ema1', {}).get('params', {}).get('length', 5), key="ema1_length")
-                ema1_timeframes = st.multiselect("EMA1 Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('ema1', {}).get('timeframes', ["5min"]), key="ema1_timeframes")
+                default_ema1 = normalize_timeframe_list(indicators_config.get('ema1', {}).get('timeframes', ["5 mins"]))
+                ema1_timeframes = st.multiselect("EMA1 Timeframes:", VALID_BAR_SIZES,
+                    default=default_ema1 if default_ema1 else ["5 mins"], key="ema1_timeframes")
             with col2:
                 ema2_length = st.number_input("EMA2 Length (Slow):", 1, 100, indicators_config.get('ema2', {}).get('params', {}).get('length', 20), key="ema2_length")
-                ema2_timeframes = st.multiselect("EMA2 Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('ema2', {}).get('timeframes', ["20min"]), key="ema2_timeframes")
+                default_ema2 = normalize_timeframe_list(indicators_config.get('ema2', {}).get('timeframes', ["20 mins"]))
+                ema2_timeframes = st.multiselect("EMA2 Timeframes:", VALID_BAR_SIZES,
+                    default=default_ema2 if default_ema2 else ["20 mins"], key="ema2_timeframes")
             with col3:
                 ema_cross_weight = st.number_input("EMA Cross Weight (%):", 0, 100, alpha_config.get('trend', {}).get('conditions', {}).get('ema_cross', {}).get('weight', 15), 1, key="ema_cross_weight")
             
@@ -2142,8 +2320,9 @@ def main():
                 macd_positive_weight = st.number_input("MACD > 0 Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('conditions', {}).get('macd_positive', {}).get('weight', 20), 1, key="macd_positive_weight")
             with col2:
                 macd_fast = st.number_input("MACD Fast Period:", 1, 50, indicators_config.get('macd', {}).get('params', {}).get('fast', 12), key="macd_fast")
-                macd_timeframes = st.multiselect("MACD Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('macd', {}).get('timeframes', ["3min"]), key="macd_timeframes")
+                default_macd = normalize_timeframe_list(indicators_config.get('macd', {}).get('timeframes', ["3 mins"]))
+                macd_timeframes = st.multiselect("MACD Timeframes:", VALID_BAR_SIZES,
+                    default=default_macd if default_macd else ["3 mins"], key="macd_timeframes")
             with col3:
                 macd_slow = st.number_input("MACD Slow Period:", 1, 100, indicators_config.get('macd', {}).get('params', {}).get('slow', 26), key="macd_slow")
             with col4:
@@ -2166,10 +2345,12 @@ def main():
                 adx_length = st.number_input("ADX Length:", 1, 100, indicators_config.get('adx', {}).get('params', {}).get('length', 14), key="adx_length")
             with col3:
                 volume_window = st.number_input("Volume Window:", 1, 100, indicators_config.get('volume_avg', {}).get('params', {}).get('window', 20), key="volume_window")
-                adx_timeframes = st.multiselect("ADX Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('adx', {}).get('timeframes', ["3min"]), key="adx_timeframes")
-                volume_timeframes = st.multiselect("Volume Timeframes:", ["1min", "3min", "5min", "10min", "15min", "20min", "30min"],
-                    default=indicators_config.get('volume_avg', {}).get('timeframes', ["3min"]), key="volume_timeframes")
+                default_adx = normalize_timeframe_list(indicators_config.get('adx', {}).get('timeframes', ["3 mins"]))
+                adx_timeframes = st.multiselect("ADX Timeframes:", VALID_BAR_SIZES,
+                    default=default_adx if default_adx else ["3 mins"], key="adx_timeframes")
+                default_volume = normalize_timeframe_list(indicators_config.get('volume_avg', {}).get('timeframes', ["3 mins"]))
+                volume_timeframes = st.multiselect("Volume Timeframes:", VALID_BAR_SIZES,
+                    default=default_volume if default_volume else ["3 mins"], key="volume_timeframes")
             
             # News Analysis
             st.markdown("---")
@@ -2192,10 +2373,12 @@ def main():
                 vix_threshold = st.number_input("VIX Threshold:", 10, 50, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 1, key="alpha_vix_threshold")
             with col3:
                 vix_threshold_weight = st.number_input("VIX Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('weight', 15), 1, key="vix_threshold_weight")
+                default_vix_market_calm = normalize_timeframe(alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('timeframe', '3 mins'))
+                default_vix_market_calm = default_vix_market_calm if default_vix_market_calm in VALID_BAR_SIZES else '3 mins'
                 vix_timeframe_market_calm = st.selectbox(
                     "VIX Timeframe (Market Calm):", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
-                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('timeframe', '3min')),
+                    VALID_BAR_SIZES,
+                    index=VALID_BAR_SIZES.index(default_vix_market_calm),
                     key="vix_timeframe_market_calm",
                     help="Timeframe for VIX data in market calm analysis"
                 )
@@ -2605,10 +2788,10 @@ def main():
                 )
      
         with tab6:
-            st.subheader("Hedge & Leverage Configuration")
+            st.subheader("Hedge Configuration")
             
             hedge_config = config.get('HEDGE_CONFIG', {})
-            leverage_config = config.get('LEVERAGE_CONFIG', {})
+            # leverage_config = config.get('LEVERAGE_CONFIG', {})
             
             # Hedge Configuration
             st.write("**Hedge Settings**")
@@ -2648,10 +2831,12 @@ def main():
                     key="sp500_drop_threshold",
                     format="%.3f"
                 )
+                default_vix_triggers = normalize_timeframe(hedge_config.get('triggers', {}).get('vix_timeframe', '3 mins'))
+                default_vix_triggers = default_vix_triggers if default_vix_triggers in VALID_BAR_SIZES else '3 mins'
                 vix_timeframe_triggers = st.selectbox(
                     "VIX Timeframe (Triggers):", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
-                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(hedge_config.get('triggers', {}).get('vix_timeframe', '3min')),
+                    VALID_BAR_SIZES,
+                    index=VALID_BAR_SIZES.index(default_vix_triggers),
                     key="vix_timeframe_triggers",
                     help="Timeframe for VIX data in hedge trigger conditions"
                 )
@@ -2699,10 +2884,12 @@ def main():
                     key="sqqq_vwap_consecutive_bars",
                     help="Number of consecutive bars SQQQ must trade above VWAP"
                 )
+                default_vix_exit = normalize_timeframe(hedge_config.get('exit_conditions', {}).get('vix_timeframe', '3 mins'))
+                default_vix_exit = default_vix_exit if default_vix_exit in VALID_BAR_SIZES else '3 mins'
                 vix_timeframe_exit = st.selectbox(
                     "VIX Timeframe (Exit):", 
-                    ["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"],
-                    index=["1min", "3min", "5min", "10min", "15min", "20min", "30min", "1 hour", "1 day"].index(hedge_config.get('exit_conditions', {}).get('vix_timeframe', '3min')),
+                    VALID_BAR_SIZES,
+                    index=VALID_BAR_SIZES.index(default_vix_exit),
                     key="vix_timeframe_exit",
                     help="Timeframe for VIX data in hedge exit conditions"
                 )

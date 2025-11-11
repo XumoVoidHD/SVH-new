@@ -10,7 +10,18 @@ import random
 class TradesDatabase:
     def __init__(self, db_path='trades.db'):
         # Ensure we use absolute path to avoid issues with working directory changes
-        self.db_path = os.path.abspath(db_path)
+        # If relative path, try to use script directory first, then current working directory
+        if not os.path.isabs(db_path):
+            # Try to get the directory where this script is located
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            # Use script directory if it's writable, otherwise use current working directory
+            if os.access(script_dir, os.W_OK):
+                self.db_path = os.path.join(script_dir, db_path)
+            else:
+                self.db_path = os.path.abspath(db_path)
+        else:
+            self.db_path = db_path
+        
         self.lock = threading.Lock()
         print(f"TradesDatabase initializing with path: {self.db_path}")
         self.init_database()
@@ -20,12 +31,40 @@ class TradesDatabase:
         max_retries = 3
         base_delay = 1.0
         
+        # Ensure the directory exists and is writable
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir and not os.path.exists(db_dir):
+            try:
+                os.makedirs(db_dir, exist_ok=True)
+                print(f"Created database directory: {db_dir}")
+            except Exception as e:
+                raise Exception(f"Cannot create database directory {db_dir}: {e}")
+        
+        # Check if directory is writable
+        if db_dir and not os.access(db_dir, os.W_OK):
+            raise PermissionError(f"Database directory {db_dir} is not writable. Please check file permissions.")
+        
         for attempt in range(max_retries):
             try:
                 # Check if database file exists and is writable
                 if os.path.exists(self.db_path):
                     if not os.access(self.db_path, os.W_OK):
-                        raise PermissionError(f"Database file {self.db_path} is not writable")
+                        # Try to fix permissions (read-only flag on Windows)
+                        try:
+                            import stat
+                            current_permissions = os.stat(self.db_path).st_mode
+                            os.chmod(self.db_path, current_permissions | stat.S_IWRITE)
+                            print(f"Fixed write permissions for database file: {self.db_path}")
+                        except Exception as perm_error:
+                            raise PermissionError(f"Database file {self.db_path} is not writable and cannot be fixed: {perm_error}")
+                    
+                    # Also check if the file is actually writable by trying to open it
+                    try:
+                        test_file = open(self.db_path, 'r+b')
+                        test_file.close()
+                    except Exception as test_error:
+                        raise PermissionError(f"Database file {self.db_path} cannot be opened for writing: {test_error}")
+                    
                     print(f"Database file exists and is writable: {self.db_path}")
                 else:
                     print(f"Database file does not exist, will be created: {self.db_path}")
@@ -38,16 +77,39 @@ class TradesDatabase:
                 return conn
                 
             except sqlite3.OperationalError as e:
-                if "readonly" in str(e).lower() or "locked" in str(e).lower():
+                error_str = str(e).lower()
+                if "readonly" in error_str:
+                    # More detailed error message for readonly database
+                    error_msg = (
+                        f"Database is read-only: {self.db_path}\n"
+                        f"Possible causes:\n"
+                        f"  1. File permissions: Check if the file/directory is writable\n"
+                        f"  2. File is locked by another process\n"
+                        f"  3. Database file is in a read-only location\n"
+                        f"  4. Insufficient user permissions\n"
+                        f"Please check file permissions and ensure you have write access to: {os.path.dirname(self.db_path) or '.'}"
+                    )
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        print(f"Database locked/readonly, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries})")
+                        print(f"Database readonly error, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries})")
+                        print(f"Error details: {e}")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        raise Exception(error_msg)
+                elif "locked" in error_str:
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                        print(f"Database locked, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(delay)
                         continue
                     else:
                         raise Exception(f"Database remains locked after {max_retries} attempts: {e}")
                 else:
                     raise e
+            except PermissionError as e:
+                # Don't retry permission errors, they won't fix themselves
+                raise e
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
@@ -611,6 +673,20 @@ class TradesDatabase:
                 return result[0] if result and result[0] is not None else 0
         except Exception as e:
             print(f"Error getting entry price for {symbol}: {e}")
+            return 0
+    
+    def get_shares(self, symbol):
+        """Get cumulative shares (total bought) for a symbol"""
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT shares FROM stock_strategies WHERE symbol = ?", (symbol,))
+                result = cursor.fetchone()
+                conn.close()
+                return result[0] if result and result[0] is not None else 0
+        except Exception as e:
+            print(f"Error getting shares for {symbol}: {e}")
             return 0
 
 # Global database instance

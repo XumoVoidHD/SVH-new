@@ -1,6 +1,6 @@
 {
     "EQUITY": 100000,
-    "TESTING": false,
+    "TESTING": true,
     "VWAP_SHOULD_BE_BELOW_PRICE": true,
     "STOCK_SELECTION": {
         "market_cap_min": 2000000000,
@@ -18,13 +18,13 @@
     "INDICATORS": {
         "vwap": {
             "timeframes": [
-                "3min"
+                "3 mins"
             ],
             "params": {}
         },
         "ema1": {
             "timeframes": [
-                "5min"
+                "5 mins"
             ],
             "params": {
                 "length": 5
@@ -32,7 +32,7 @@
         },
         "ema2": {
             "timeframes": [
-                "20min"
+                "20 mins"
             ],
             "params": {
                 "length": 20
@@ -40,7 +40,7 @@
         },
         "macd": {
             "timeframes": [
-                "3min"
+                "3 mins"
             ],
             "params": {
                 "fast": 12,
@@ -50,7 +50,7 @@
         },
         "adx": {
             "timeframes": [
-                "3min"
+                "3 mins"
             ],
             "params": {
                 "length": 14
@@ -58,7 +58,7 @@
         },
         "volume_avg": {
             "timeframes": [
-                "3min"
+                "3 mins"
             ],
             "params": {
                 "window": 20
@@ -119,13 +119,13 @@
                 "vix_threshold": {
                     "weight": 15,
                     "threshold": 22,
-                    "timeframe": "3min"
+                    "timeframe": "3mins"
                 }
             }
         }
     },
     "RISK_CONFIG": {
-        "alpha_score_threshold": 85,
+        "alpha_score_threshold": 65,
         "risk_per_trade": 0.004,
         "max_position_equity_pct": 0.1,
         "max_daily_trades": 10,
@@ -137,15 +137,15 @@
         "atr_multiplier": 1.5
     },
     "STOP_LOSS_CONFIG": {
-        "default_stop_loss": 0.015,
-        "volatile_stop_loss": 0.02,
-        "max_stop_loss": 0.04,
-        "atr_multiplier": 1.5,
-        "atr_period": 14,
+        "default_stop_loss": 0.01,
+        "volatile_stop_loss": 0.014999999999999996,
+        "max_stop_loss": 0.024999999999999988,
+        "atr_multiplier": 1.1999999999999997,
+        "atr_period": 10,
         "trailing_stop_levels": [
             {
                 "gain": 0.02,
-                "new_stop_pct": 0.0075
+                "new_stop_pct": 0.009999999999999998
             },
             {
                 "gain": 0.05,
@@ -184,14 +184,14 @@
         "triggers": {
             "vix_threshold": 22,
             "sp500_drop_threshold": 0.012,
-            "vix_timeframe": "3min"
+            "vix_timeframe": "3mins"
         },
         "exit_conditions": {
             "vix_exit_threshold": 20,
             "vix_slope_period": 10,
             "sp500_recovery_threshold": 0.006,
             "sqqq_vwap_consecutive_bars": 2,
-            "vix_timeframe": "3min"
+            "vix_timeframe": "3mins"
         },
         "hedge_levels": {
             "early": {
@@ -204,31 +204,14 @@
             },
             "severe": {
                 "beta": 0.3,
-                "equity_pct": 0.10
+                "equity_pct": 0.1
             }
         }
-    },
-    "LEVERAGE_CONFIG": {
-        "enabled": false,
-        "max_leverage": 2.0,
-        "conditions": {
-            "alpha_score_min": 85,
-            "vix_max": 18,
-            "drawdown_max": 0.005,
-            "vix_trend_days": 10,
-            "vix_timeframe": "1 day"
-        },
-        "leverage_levels": {
-            "all_conditions_met": 2.0,
-            "partial_conditions": 1.2,
-            "default": 1.0
-        },
-        "margin_alert_threshold": 1.5
     },
     "ORDER_CONFIG": {
         "limit_offset_min": 3e-05,
         "limit_offset_max": 7e-05,
-        "order_window": 10
+        "order_window": 30
     },
     "TRADING_HOURS": {
         "market_open": "09:30",
