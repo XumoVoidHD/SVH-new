@@ -117,11 +117,25 @@ class IBBroker(EWrapper, EClient):
         return contract
     
     def index_contract(self, symbol: str):
-        """Create index contract for market breadth indicators like TRIN, TICK"""
+        """Create index contract for market breadth indicators like TRIN, TICK, VIX, SPX"""
         contract = Contract()
         contract.symbol = symbol
         contract.secType = "IND"
-        contract.exchange = "NYSE"
+        
+        # Set exchange based on symbol
+        if symbol in ["VIX", "SPX"]:
+            contract.exchange = "CBOE"
+        elif symbol in ["TRIN-NYSE", "TICK-NYSE"]:
+            # Extract base symbol if it contains exchange suffix
+            if "-" in symbol:
+                base_symbol, exchange = symbol.split("-")
+                contract.symbol = base_symbol
+                contract.exchange = exchange
+            else:
+                contract.exchange = "NYSE"
+        else:
+            contract.exchange = "NYSE"
+        
         contract.currency = "USD"
         return contract
 

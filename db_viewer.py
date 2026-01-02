@@ -11,6 +11,7 @@ from helpers.reset_positions import close_all_open_positions
 from db.trades_db import trades_db
 import subprocess
 import sys
+import psutil
 
 # Page configuration
 st.set_page_config(
@@ -66,6 +67,33 @@ def normalize_timeframe_list(timeframes):
     normalized = [normalize_timeframe(tf) for tf in timeframes]
     # Filter to only include valid ones
     return [tf for tf in normalized if tf in VALID_BAR_SIZES]
+
+def format_database_display_name(file_info):
+    """Format database filename to display as 'Trades DD/MM/YYYY'"""
+    try:
+        # Extract date from filename (e.g., "trades_2025-8-16_06-10-04.db" -> "2025-8-16_06-10-04")
+        # or "trades_2025-8-16.db" -> "2025-8-16"
+        date_str = file_info['date']
+        
+        # Remove time portion if present (everything after underscore)
+        if '_' in date_str:
+            date_str = date_str.split('_')[0]
+        
+        # Parse date (format: YYYY-M-D or YYYY-MM-DD)
+        date_parts = date_str.split('-')
+        if len(date_parts) == 3:
+            year = int(date_parts[0])
+            month = int(date_parts[1])
+            day = int(date_parts[2])
+            
+            # Format as "Trades DD/MM/YYYY"
+            return f"Trades {day:02d}/{month:02d}/{year}"
+    except Exception as e:
+        # Fallback to original format if parsing fails
+        return f"Trades {file_info['date']}"
+    
+    # Fallback if date format is unexpected
+    return f"Trades {file_info['date']}"
 
 # Function to load configuration from creds.json
 def load_config():
@@ -167,11 +195,63 @@ def get_all_data(conn, table_name):
     
     return data, columns
 
+# Function to get bot status
+def get_bot_status():
+    """Read bot status from bot_status.json and verify process health"""
+    try:
+        if os.path.exists('bot_status.json'):
+            with open('bot_status.json', 'r') as f:
+                status = json.load(f)
+            
+            # Check if process is actually running
+            pid = status.get('pid')
+            bot_on = status.get('bot_on', False)
+            
+            if bot_on and pid:
+                if not psutil.pid_exists(pid):
+                    # Process is dead, update status
+                    status['bot_on'] = False
+                    status['initializing'] = False
+                    status['pid'] = None
+                    
+                    # Write updated status back to file
+                    try:
+                        with open('bot_status.json', 'w') as f:
+                            json.dump(status, f)
+                    except:
+                        pass
+                        
+                    return status
+            
+            return status
+    except:
+        pass
+    return {"bot_on": False, "initializing": False}
+
 def main():
     # Load configuration
     config = load_config()
     
+    # Auto-refresh every 2 seconds to keep status updated
+    st_autorefresh(interval=5000, key="global_refresh")
+    
     # Sidebar for navigation
+    st.sidebar.title("Navigation")
+    
+    # Bot Status Indicator
+    status = get_bot_status()
+    bot_on = status.get("bot_on", False)
+    initializing = status.get("initializing", False)
+    
+    if bot_on and initializing:
+        st.sidebar.warning("🟡 Bot Status: Initializing...")
+    elif bot_on:
+        st.sidebar.success("🟢 Bot Status: Running")
+    else:
+        st.sidebar.error("🔴 Bot Status: Stopped")
+        
+    st.sidebar.markdown("---")
+    
     page = st.sidebar.selectbox(
         "Select Page",
         ["Database Viewer", "Historical Data", "Configuration Editor", "Raw Configuration"]
@@ -462,7 +542,7 @@ def main():
                     
                     # ===== EFFICIENCY & EXECUTION METRICS =====
                     st.markdown("### Efficiency & Execution Metrics")
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3, col4, col5 = st.columns(5)
                     
                     with col1:
                         # Calculate total cost basis (sum of all positions)
@@ -525,6 +605,11 @@ def main():
                         else:
                             st.metric("Avg Trade Duration", "N/A")
                     
+                    with col5:  
+                        try:
+                            st.metric("Start Date", df['created_at'].apply(lambda x: x.strftime('%m-%d-%Y')).min())
+                        except Exception as e:
+                            st.metric("Start Date", "N/A")
                     st.markdown("---")
                 
                 # Add filter options in a single row
@@ -634,7 +719,7 @@ def main():
                         try:
                             # Try to parse as datetime and extract time
                             time_obj = pd.to_datetime(time_value)
-                            return time_obj.strftime('%H:%M:%S')
+                            return time_obj.strftime('%I:%M:%S %p')
                         except:
                             return 'N/A'
                     
@@ -660,8 +745,7 @@ def main():
             
             conn.close()
             
-            # Auto-refresh every 7 seconds
-            st_autorefresh(interval=7000, key="simplified_database_refresh")
+            # Auto-refresh moved to global scope
         
         with tab2:
             st.subheader("Raw Database View")
@@ -1486,11 +1570,10 @@ def main():
                 
                 if historical_files:
                     # Create a file selector for deletion
-                    file_options = [f"{f['filename']} ({f['date']})" for f in historical_files]
                     selected_file_idx = st.selectbox(
                         "Select Database File to Delete:",
-                        range(len(file_options)),
-                        format_func=lambda x: file_options[x],
+                        range(len(historical_files)),
+                        format_func=lambda x: format_database_display_name(historical_files[x]),
                         key="delete_file_selector"
                     )
                     
@@ -1570,16 +1653,21 @@ def main():
                 st.markdown("View raw and simplified data from any historical database file")
                 
                 # Database file selector
-                if historical_files:
-                    file_options = [f"{f['filename']} ({f['date']})" for f in historical_files]
+                non_empty_files = []
+                for f in historical_files:
+                    data_preview = trades_db.load_historical_data(f['path'])
+                    if data_preview:  # Only keep if data exists
+                        non_empty_files.append(f)
+
+                if non_empty_files:
                     selected_file_idx = st.selectbox(
                         "Select Database File:",
-                        range(len(file_options)),
-                        format_func=lambda x: file_options[x]
+                        range(len(non_empty_files)),
+                        format_func=lambda x: format_database_display_name(non_empty_files[x])
                     )
                     
                     if selected_file_idx is not None:
-                        selected_file = historical_files[selected_file_idx]
+                        selected_file = non_empty_files[selected_file_idx]
                         
                         # Load data from selected file
                         data = trades_db.load_historical_data(selected_file['path'])
@@ -1846,7 +1934,7 @@ def main():
                                         try:
                                             # Try to parse as datetime and extract time
                                             time_obj = pd.to_datetime(time_value)
-                                            return time_obj.strftime('%H:%M:%S')
+                                            return time_obj.strftime('%I:%M:%S %p')
                                         except:
                                             return 'N/A'
                                     
@@ -2810,7 +2898,7 @@ def main():
                 hedge_symbol = st.selectbox(
                     "Hedge Symbol:", 
                     options=hedge_options,
-                    index=hedge_options.index(current_hedge),
+                    index=hedge_options.index(current_hedge) if current_hedge in hedge_options else 0,
                     key="hedge_symbol"
                 )
                 vix_threshold = st.number_input(
@@ -2921,6 +3009,25 @@ def main():
                     format="%.3f",
                     help="Percentage of equity to allocate (e.g., 0.033 = 3.3%)"
                 )
+                early_vix_threshold = st.number_input(
+                    "VIX Threshold (Early):", 
+                    min_value=10, 
+                    max_value=30, 
+                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('vix_threshold', 20), 
+                    step=1, 
+                    key="early_vix_threshold",
+                    help="VIX level to trigger early hedge"
+                )
+                early_spx_drop = st.number_input(
+                    "SPX Drop Threshold (%):", 
+                    min_value=0.001, 
+                    max_value=0.05, 
+                    value=hedge_config.get('hedge_levels', {}).get('early', {}).get('spx_drop_threshold', 0.0075), 
+                    step=0.0001, 
+                    key="early_spx_drop",
+                    format="%.4f",
+                    help="S&P 500 drop to trigger early hedge"
+                )
             with col2:
                 st.write("**Mild Hedge**")
                 mild_beta = st.number_input(
@@ -2943,6 +3050,25 @@ def main():
                     format="%.3f",
                     help="Percentage of equity to allocate (e.g., 0.05 = 5%)"
                 )
+                mild_vix_threshold = st.number_input(
+                    "VIX Threshold (Mild):", 
+                    min_value=10, 
+                    max_value=35, 
+                    value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('vix_threshold', 22), 
+                    step=1, 
+                    key="mild_vix_threshold",
+                    help="VIX level to trigger mild hedge"
+                )
+                mild_spx_drop = st.number_input(
+                    "SPX Drop Threshold (%):", 
+                    min_value=0.001, 
+                    max_value=0.05, 
+                    value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('spx_drop_threshold', 0.012), 
+                    step=0.0001, 
+                    key="mild_spx_drop",
+                    format="%.4f",
+                    help="S&P 500 drop to trigger mild hedge"
+                )
             with col3:
                 st.write("**Severe Hedge**")
                 severe_beta = st.number_input(
@@ -2964,6 +3090,25 @@ def main():
                     key="severe_equity_pct",
                     format="%.3f",
                     help="Percentage of equity to allocate (e.g., 0.10 = 10%)"
+                )
+                severe_vix_threshold = st.number_input(
+                    "VIX Threshold (Severe):", 
+                    min_value=15, 
+                    max_value=40, 
+                    value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('vix_threshold', 25), 
+                    step=1, 
+                    key="severe_vix_threshold",
+                    help="VIX level to trigger severe hedge"
+                )
+                severe_spx_drop = st.number_input(
+                    "SPX Drop Threshold (%):", 
+                    min_value=0.001, 
+                    max_value=0.05, 
+                    value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('spx_drop_threshold', 0.02), 
+                    step=0.0001, 
+                    key="severe_spx_drop",
+                    format="%.4f",
+                    help="S&P 500 drop to trigger severe hedge"
                 )
             
             # # Leverage Configuration
@@ -3297,9 +3442,24 @@ def main():
                         "vix_timeframe": vix_timeframe_exit
                     },
                     "hedge_levels": {
-                        "early": {"beta": early_beta, "equity_pct": early_equity_pct},
-                        "mild": {"beta": mild_beta, "equity_pct": mild_equity_pct},
-                        "severe": {"beta": severe_beta, "equity_pct": severe_equity_pct}
+                        "early": {
+                            "beta": early_beta,
+                            "equity_pct": early_equity_pct,
+                            "vix_threshold": early_vix_threshold,
+                            "spx_drop_threshold": early_spx_drop
+                        },
+                        "mild": {
+                            "beta": mild_beta,
+                            "equity_pct": mild_equity_pct,
+                            "vix_threshold": mild_vix_threshold,
+                            "spx_drop_threshold": mild_spx_drop
+                        },
+                        "severe": {
+                            "beta": severe_beta,
+                            "equity_pct": severe_equity_pct,
+                            "vix_threshold": severe_vix_threshold,
+                            "spx_drop_threshold": severe_spx_drop
+                        }
                     }
                 },
                 # "LEVERAGE_CONFIG": {

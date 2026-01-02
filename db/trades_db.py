@@ -10,13 +10,16 @@ import random
 class TradesDatabase:
     def __init__(self, db_path='trades.db'):
         # Ensure we use absolute path to avoid issues with working directory changes
-        # If relative path, try to use script directory first, then current working directory
+        # If relative path, use project root (parent of db folder) or current working directory
         if not os.path.isabs(db_path):
-            # Try to get the directory where this script is located
+            # Get the directory where this script is located (db folder)
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            # Use script directory if it's writable, otherwise use current working directory
-            if os.access(script_dir, os.W_OK):
-                self.db_path = os.path.join(script_dir, db_path)
+            # Get the project root (parent directory of db folder)
+            project_root = os.path.dirname(script_dir)
+            
+            # Use project root if it's writable, otherwise use current working directory
+            if os.access(project_root, os.W_OK):
+                self.db_path = os.path.join(project_root, db_path)
             else:
                 self.db_path = os.path.abspath(db_path)
         else:

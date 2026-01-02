@@ -118,8 +118,8 @@
             "conditions": {
                 "vix_threshold": {
                     "weight": 15,
-                    "threshold": 22,
-                    "timeframe": "3mins"
+                    "threshold": 15,
+                    "timeframe": "3 mins"
                 }
             }
         }
@@ -176,35 +176,41 @@
     },
     "HEDGE_CONFIG": {
         "enabled": true,
-        "hedge_symbol": "SQQQ",
+        "hedge_symbol": "SPXU",
         "hedge_options": [
             "SQQQ",
             "SPXU"
         ],
         "triggers": {
-            "vix_threshold": 22,
+            "vix_threshold": 15,
             "sp500_drop_threshold": 0.012,
-            "vix_timeframe": "3mins"
+            "vix_timeframe": "3 mins"
         },
         "exit_conditions": {
             "vix_exit_threshold": 20,
             "vix_slope_period": 10,
             "sp500_recovery_threshold": 0.006,
             "sqqq_vwap_consecutive_bars": 2,
-            "vix_timeframe": "3mins"
+            "vix_timeframe": "3 mins"
         },
         "hedge_levels": {
             "early": {
                 "beta": 0.1,
-                "equity_pct": 0.033
+                "equity_pct": 0.033,
+                "vix_threshold": 20,
+                "spx_drop_threshold": 0.0075
             },
             "mild": {
                 "beta": 0.15,
-                "equity_pct": 0.05
+                "equity_pct": 0.05,
+                "vix_threshold": 22,
+                "spx_drop_threshold": 0.012
             },
             "severe": {
                 "beta": 0.3,
-                "equity_pct": 0.1
+                "equity_pct": 0.1,
+                "vix_threshold": 25,
+                "spx_drop_threshold": 0.02
             }
         }
     },

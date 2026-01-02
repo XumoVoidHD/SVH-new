@@ -39,5 +39,5 @@ def split_logs_by_strategy(log_file, start, end):
 # Example usage
 if __name__ == "__main__":
     # Example: if your log file is "log/system.log"
-    log_file_path = "C:/Users/vedan/Desktop/projects/SVH new/logs/2025-10-31_13-47-29.log"  # <-- change this to your log file name
+    log_file_path = "C:/Users/vedan/Desktop/projects/SVH new/logs/2025-11-12_08-43-55.log"  # <-- change this to your log file name
     split_logs_by_strategy(log_file_path, start=0, end=50)
