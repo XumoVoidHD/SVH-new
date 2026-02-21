@@ -1,5 +1,6 @@
 from simulation import ibkr_broker
 import pandas as pd
+import sys
 from stock_selector import StockSelector, initialize_stock_selector
 import random
 import threading
@@ -60,11 +61,12 @@ TESTING = creds.TESTING
 
 class Strategy:
     
-    def __init__(self, manager, stock, broker, config):
+    def __init__(self, manager, stock, broker, config, sector='Unknown'):
         self.manager = manager
         self.stock = stock
         self.broker = broker
         self.config = config
+        self.sector = sector or 'Unknown'
         self.score = 0
         self.additional_checks_passed = False
         
@@ -739,6 +741,8 @@ class Strategy:
     def calculate_alpha_score(self):
         """Calculate Alpha Score based on configurable parameters"""
         self.score = 0
+        self.indicator_values = {}
+        self.criteria_passed = {}
         
         # Trend analysis (30%)
         if self._check_trend_conditions():
@@ -757,6 +761,7 @@ class Strategy:
         
         # News analysis (15%) - placeholder
         self.score += self.alpha_score_config.news.weight
+        self.criteria_passed['news_passed'] = True
         print(f"Score +{self.alpha_score_config.news.weight} (News check - placeholder)")
         
         # Market Calm analysis (15%)
@@ -766,7 +771,7 @@ class Strategy:
         
         print(f"\nFinal Alpha Score: {self.score}")
         
-        # Update database with alpha score
+        # Update database with alpha score (indicators/criteria saved after additional_checks)
         trades_db.update_strategy_data(self.stock, score=self.score)
     
     def _check_trend_conditions(self):
@@ -807,14 +812,29 @@ class Strategy:
                 return False
             
             # Price > VWAP
-            price_vwap_ok = bool(self.data[vwap_tf]['close'].iloc[-1] > self.indicators[vwap_tf]['vwap'].iloc[-1])
-            
-            # EMA1 > EMA2 (5-min EMA > 20-min EMA)
-            ema_cross_ok = bool(self.indicators[ema1_tf]['ema1'].iloc[-1] > self.indicators[ema2_tf]['ema2'].iloc[-1])
-            
-            return price_vwap_ok and ema_cross_ok
+            close_price = float(self.data[vwap_tf]['close'].iloc[-1])
+            vwap_val = float(self.indicators[vwap_tf]['vwap'].iloc[-1])
+            ema1_val = float(self.indicators[ema1_tf]['ema1'].iloc[-1])
+            ema2_val = float(self.indicators[ema2_tf]['ema2'].iloc[-1])
+            price_vwap_ok = bool(close_price > vwap_val)
+            ema_cross_ok = bool(ema1_val > ema2_val)
+            trend_passed = price_vwap_ok and ema_cross_ok
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['close'] = close_price
+            self.indicator_values['vwap'] = vwap_val
+            self.indicator_values['ema1'] = ema1_val
+            self.indicator_values['ema2'] = ema2_val
+            self.criteria_passed['trend_passed'] = trend_passed
+            self.criteria_passed['price_above_vwap'] = price_vwap_ok
+            self.criteria_passed['ema_cross'] = ema_cross_ok
+            return trend_passed
         except Exception as e:
             print(f"Error checking trend conditions: {e}")
+            if hasattr(self, 'criteria_passed'):
+                self.criteria_passed['trend_passed'] = False
             return False
     
     def _check_momentum_conditions(self):
@@ -836,9 +856,19 @@ class Strategy:
             return False
         
         try:
-            return bool(self.indicators[macd_tf]['macd'].iloc[-1] > 0)
+            macd_val = float(self.indicators[macd_tf]['macd'].iloc[-1])
+            momentum_passed = bool(macd_val > 0)
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['macd'] = macd_val
+            self.criteria_passed['momentum_passed'] = momentum_passed
+            return momentum_passed
         except Exception as e:
             print(f"Error accessing MACD indicator: {e}")
+            if hasattr(self, 'criteria_passed'):
+                self.criteria_passed['momentum_passed'] = False
             return False
     
     def _check_volume_volatility_conditions(self):
@@ -871,18 +901,29 @@ class Strategy:
         
         try:
             # Volume spike check
-            recent_volume = self.data[volume_avg_tf]['volume'].iloc[-1]
-            avg_volume = self.indicators[volume_avg_tf]['volume_avg'].iloc[-1]
+            recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-1])
+            avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-1])
             multiplier = self.alpha_score_config.volume_volatility.conditions.volume_spike.multiplier
             volume_ok = bool(recent_volume > multiplier * avg_volume)
-            
-            # ADX threshold check
+            adx_val = float(self.indicators[adx_tf]['adx'].iloc[-1])
             adx_threshold = self.alpha_score_config.volume_volatility.conditions.adx_threshold.threshold
-            adx_ok = bool(self.indicators[adx_tf]['adx'].iloc[-1] > adx_threshold)
-            
-            return volume_ok and adx_ok
+            adx_ok = bool(adx_val > adx_threshold)
+            volume_volatility_passed = volume_ok and adx_ok
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['volume'] = recent_volume
+            self.indicator_values['volume_avg'] = avg_volume
+            self.indicator_values['adx'] = adx_val
+            self.criteria_passed['volume_volatility_passed'] = volume_volatility_passed
+            self.criteria_passed['volume_spike'] = volume_ok
+            self.criteria_passed['adx_above_threshold'] = adx_ok
+            return volume_volatility_passed
         except Exception as e:
             print(f"Error checking volume/volatility conditions: {e}")
+            if hasattr(self, 'criteria_passed'):
+                self.criteria_passed['volume_volatility_passed'] = False
             return False
     
     def _check_market_calm_conditions(self):
@@ -891,17 +932,27 @@ class Strategy:
             vix_timeframe = self.alpha_score_config.market_calm.conditions.vix_threshold.timeframe
             vix_df = self._safe_broker_call(self.broker.get_historical_data_index, "VIX", duration="1 D", bar_size=vix_timeframe)
             if vix_df is None or vix_df.empty:
+                if hasattr(self, 'criteria_passed'):
+                    self.criteria_passed['market_calm_passed'] = False
                 return False
-            
             vix_close = vix_df['close']
             vix_threshold = self.alpha_score_config.market_calm.conditions.vix_threshold.threshold
-            
-            # VIX < threshold and dropping
-            vix_low = bool(vix_close.iloc[-1] < vix_threshold)
+            vix_current = float(vix_close.iloc[-1])
+            vix_low = bool(vix_current < vix_threshold)
             vix_dropping = len(vix_close) >= 4 and bool(vix_close.iloc[-1] < vix_close.iloc[-4])
-            
-            return vix_low and vix_dropping
-        except:
+            market_calm_passed = vix_low and vix_dropping
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['vix'] = vix_current
+            self.criteria_passed['market_calm_passed'] = market_calm_passed
+            self.criteria_passed['vix_low'] = vix_low
+            self.criteria_passed['vix_dropping'] = vix_dropping
+            return market_calm_passed
+        except Exception:
+            if hasattr(self, 'criteria_passed'):
+                self.criteria_passed['market_calm_passed'] = False
             return False
     
     def perform_additional_checks(self):
@@ -930,16 +981,23 @@ class Strategy:
             else:
                 try:
                     # Check +2x volume
-                    recent_volume = self.data[volume_avg_tf]['volume'].iloc[-1]
-                    avg_volume = self.indicators[volume_avg_tf]['volume_avg'].iloc[-1]
+                    recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-1])
+                    avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-1])
                     volume_multiplier = self.additional_checks_config.volume_multiplier
-                    
                     volume_check = bool(recent_volume > volume_multiplier * avg_volume)
+                    if not hasattr(self, 'indicator_values'):
+                        self.indicator_values = {}
+                    if not hasattr(self, 'criteria_passed'):
+                        self.criteria_passed = {}
+                    self.indicator_values['volume_recent'] = recent_volume
+                    self.indicator_values['volume_avg_addl'] = avg_volume
+                    self.criteria_passed['volume_check_passed'] = volume_check
                     print(f"{'Passed' if volume_check else 'Failed'} +{volume_multiplier}x volume check {'passed' if volume_check else 'failed'}")
                 except Exception as e:
                     print(f"Error checking volume: {e}")
                     volume_check = False
-                
+                    if hasattr(self, 'criteria_passed'):
+                        self.criteria_passed['volume_check_passed'] = False
                 # Check VWAP slope
                 vwap_slope_check = self._check_vwap_slope()
                 
@@ -955,11 +1013,19 @@ class Strategy:
                     print(f"Alpha Score < {bypass_alpha} ({self.score}) - TRIN/TICK check {'passed' if market_conditions_check else 'failed'}")
                 
                 self.additional_checks_passed = bool(volume_check and vwap_slope_check and market_conditions_check)
-                
+                self.criteria_passed['trin_tick_passed'] = market_conditions_check  # may be overwritten by _check_trin_tick if not bypassed
                 print(f"\nAdditional Checks Passed: {self.additional_checks_passed}")
-        
-        # Always update database with additional checks status (regardless of pass/fail)
-        trades_db.update_strategy_data(self.stock, additional_checks_passed=self.additional_checks_passed)
+        if not hasattr(self, 'indicator_values'):
+            self.indicator_values = {}
+        if not hasattr(self, 'criteria_passed'):
+            self.criteria_passed = {}
+        # Always update database with additional checks status and indicator/criteria JSON (regardless of pass/fail)
+        trades_db.update_strategy_data(
+            self.stock,
+            additional_checks_passed=self.additional_checks_passed,
+            indicator_values=json.dumps(self.indicator_values),
+            criteria_passed=json.dumps(self.criteria_passed)
+        )
     
     def _check_vwap_slope(self):
         """Check VWAP slope condition"""
@@ -981,18 +1047,23 @@ class Strategy:
             return False
         
         try:
-            current_vwap = vwap_series.iloc[-1]
-            vwap_period_ago = vwap_series.iloc[-2]
+            current_vwap = float(vwap_series.iloc[-1])
+            vwap_period_ago = float(vwap_series.iloc[-2])
             vwap_slope = (current_vwap - vwap_period_ago) / self.additional_checks_config.vwap_slope_period
-            
             threshold = self.additional_checks_config.vwap_slope_threshold
             slope_ok = bool(vwap_slope > threshold)
-            
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['vwap_slope'] = vwap_slope
+            self.criteria_passed['vwap_slope_passed'] = slope_ok
             print(f"{'Passed' if slope_ok else 'Failed'} VWAP slope check {'passed' if slope_ok else 'failed'}: {vwap_slope:.3f} {'>' if slope_ok else '<='} {threshold}")
-            
             return slope_ok
         except Exception as e:
             print(f"Error checking VWAP slope: {e}")
+            if hasattr(self, 'criteria_passed'):
+                self.criteria_passed['vwap_slope_passed'] = False
             return False
     
     def _check_trin_tick_conditions(self):
@@ -1014,30 +1085,39 @@ class Strategy:
             trin_check = False
             
             if trin_data is not None and not trin_data.empty and 'close' in trin_data.columns:
-                current_trin = trin_data['close'].iloc[-1]
+                current_trin = float(trin_data['close'].iloc[-1])
                 trin_check = bool(current_trin <= trin_threshold)
                 print(f"TRIN-NYSE check: {current_trin:.2f} {'<=' if trin_check else '>'} {trin_threshold} - {'Passed' if trin_check else 'Failed'}")
             else:
                 print("TRIN-NYSE data unavailable - treating as failed")
+                if hasattr(self, 'criteria_passed'):
+                    self.criteria_passed['trin_tick_passed'] = False
                 return False
-            
             # Check TICK (NYSE TICK) - MA should be >= threshold
             # TICK shows net upticks minus downticks, positive = more buying pressure
             tick_data = self.broker.get_historical_data_index(symbol="TICK-NYSE", bar_size="1 min", duration="1 D")
             tick_check = False
-            
+            current_tick_ma = None
             if tick_data is not None and not tick_data.empty and 'close' in tick_data.columns:
                 # Calculate moving average of TICK with configurable window
                 tick_ma = tick_data['close'].rolling(window=tick_ma_window).mean()
-                current_tick_ma = tick_ma.iloc[-1]
+                current_tick_ma = float(tick_ma.iloc[-1])
                 tick_check = bool(current_tick_ma >= tick_threshold)
                 print(f"TICK-NYSE {tick_ma_window}-min MA check: {current_tick_ma:.0f} {'>=' if tick_check else '<'} {tick_threshold} - {'Passed' if tick_check else 'Failed'}")
             else:
                 print("TICK-NYSE data unavailable - treating as failed")
+                if hasattr(self, 'criteria_passed'):
+                    self.criteria_passed['trin_tick_passed'] = False
                 return False
-            
-            # Both conditions must pass
-            return bool(trin_check and tick_check)
+            trin_tick_passed = bool(trin_check and tick_check)
+            if not hasattr(self, 'indicator_values'):
+                self.indicator_values = {}
+            if not hasattr(self, 'criteria_passed'):
+                self.criteria_passed = {}
+            self.indicator_values['trin'] = current_trin
+            self.indicator_values['tick_ma'] = current_tick_ma
+            self.criteria_passed['trin_tick_passed'] = trin_tick_passed
+            return trin_tick_passed
             
         except Exception as e:
             print(f"Error checking TRIN/TICK conditions: {e}")
@@ -1053,16 +1133,18 @@ class Strategy:
         
         # Base risk per trade
         base_risk_per_trade = creds.RISK_CONFIG.risk_per_trade
-        
-        # Apply leverage to risk_per_trade (NOT to shares)
-        # risk_per_trade = base_risk_per_trade * leverage_multiplier
         risk_per_trade = base_risk_per_trade
         
-        print(f"\n[Position Sizing] {self.stock}")
+        # Per-sector capital cap: each sector can use at most equity * max_sector_weight
+        max_sector_weight = getattr(creds.STOCK_SELECTION, 'max_sector_weight', 0.30)
+        sector_cap = account_equity * max_sector_weight
+        with self.manager.manager_lock:
+            sector_used = self.manager.sector_used_capital.get(self.sector, 0)
+        available_for_sector = max(0, sector_cap - sector_used)
+        
+        print(f"\n[Position Sizing] {self.stock} (sector: {self.sector})")
         print(f"  - Base risk: {base_risk_per_trade*100:.2f}%")
-        # print(f"  - Leverage: {leverage_multiplier:.1f}x")
-        # print(f"  - Adjusted risk: {risk_per_trade*100:.2f}%")
-        print(f"  - Adjusted risk: {base_risk_per_trade*100:.2f}%")
+        print(f"  - Sector cap: ${sector_cap:,.0f} ({max_sector_weight*100:.0f}% equity), sector used: ${sector_used:,.0f}, available: ${available_for_sector:,.0f}")
         
         stop_loss_pct = self.calculate_stop_loss(current_price)
         stop_loss_price = current_price * (1 - stop_loss_pct)
@@ -1070,13 +1152,15 @@ class Strategy:
         if risk_per_share <= 0:
             return 0, 0, 0, 0
         
-        # Calculate position size based on leveraged risk
+        # Calculate position size based on risk; cap by sector and max position %
         capital_for_trade = (account_equity * risk_per_trade) / stop_loss_pct
-        
-        # Cap at max position equity percentage
+        capital_for_trade = min(capital_for_trade, available_for_sector)
         if capital_for_trade > (account_equity * creds.RISK_CONFIG.max_position_equity_pct):
             capital_for_trade = account_equity * creds.RISK_CONFIG.max_position_equity_pct
             print(f"  - Position capped at {creds.RISK_CONFIG.max_position_equity_pct*100:.0f}% max equity")
+        if capital_for_trade <= 0:
+            print(f"  - No capital left for sector {self.sector} (cap {max_sector_weight*100:.0f}% already used)")
+            return 0, 0, 0, 0
         
         shares = int(capital_for_trade / current_price)
         
@@ -1173,14 +1257,17 @@ class Strategy:
                     #     self.execute_hedge(hedge_level, hedge_beta, hedge_equity_pct)
                     shares = trade[2]
                     print(f"Order placed for {self.stock}: {trade}")
+                    cost = shares * trade[1]
                     with self.manager.manager_lock:
-                        self.used_capital += shares * trade[1]
-                        self.manager.available_capital -= shares * trade[1]
-                        self.manager.used_capital += shares * trade[1]
-                        self.manager.stock_invested_capital += shares * trade[1]
+                        self.used_capital += cost
+                        self.manager.available_capital -= cost
+                        self.manager.used_capital += cost
+                        self.manager.stock_invested_capital += cost
+                        self.manager.sector_used_capital[self.sector] = self.manager.sector_used_capital.get(self.sector, 0) + cost
                         print(f"Used Capital: ${self.used_capital:.2f}")
                         print(f"Available Capital: ${self.manager.available_capital:.2f}")
                         print(f"Stock Invested Capital: ${self.manager.stock_invested_capital:.2f}")
+                        print(f"Sector '{self.sector}' used capital: ${self.manager.sector_used_capital.get(self.sector, 0):,.0f}")
 
                     self.entry_price = trade[1]
                     self.stop_loss_price = stop_loss
@@ -1214,7 +1301,8 @@ class Strategy:
                         current_price=self.current_price,
                         unrealized_pnl=self.unrealized_pnl,
                         realized_pnl=self.realized_pnl,
-                        used_capital=self.used_capital
+                        used_capital=self.used_capital,
+                        sector=self.sector
                     )
         else:
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
@@ -1443,14 +1531,14 @@ class Strategy:
             original_cost = self.entry_price * shares_to_sell
             self.manager.used_capital -= original_cost
             # Round to 0 if in range [-2, 2] to handle floating point precision errors
-            # We add: shares * trade[1], we subtract: entry_price * shares_to_sell
-            # Since entry_price = trade[1], they should match, but floating point can cause tiny differences
             new_value = self.manager.stock_invested_capital - original_cost
             if -2 <= new_value <= 2:
                 self.manager.stock_invested_capital = 0
             else:
                 self.manager.stock_invested_capital = new_value
             self.used_capital -= original_cost
+            # Decrement sector used capital so the sector cap is freed for new positions
+            self.manager.sector_used_capital[self.sector] = max(0, self.manager.sector_used_capital.get(self.sector, 0) - original_cost)
             print(f"Available Capital after closing position: ${self.manager.available_capital:.2f}")
             print(f"Used Capital after closing position: ${self.used_capital:.2f}")
             print(f"Used Total Capital after closing position: ${self.manager.used_capital:.2f}")
@@ -1911,6 +1999,7 @@ class StrategyManager:
         self.available_capital = creds.EQUITY
         self.used_capital = 0  # Total capital used (stocks only, excludes hedge)
         self.stock_invested_capital = 0  # Capital invested in stocks (for hedge calculations)
+        self.sector_used_capital = {}  # sector name -> total used_capital (stocks only); capped at equity * max_sector_weight per sector
         self.realized_pnl = 0
         self.unrealized_pnl = 0
         self.stocks_list, self.stocks_dict = [], []
@@ -2806,13 +2895,20 @@ class StrategyManager:
         
         try:
             self.stocks_list, self.stocks_dict = self.selector.run()
-            # self.stocks_list = ["AAPL"]
-            # self.stocks_dict = []
             print(f"Stock selector returned {len(self.stocks_list)} stocks")
         except Exception as e:
             print(f"Error in stock selector: {e}")
             self.stocks_list = ["AAPL"]
             self.stocks_dict = []
+
+        # Initialize sector_used_capital from DB (existing active positions)
+        self.sector_used_capital = trades_db.get_sector_used_capital()
+        # Set sector in DB for each stock from selector (stocks_dict has 'sector' per symbol)
+        for rec in self.stocks_dict:
+            sym = rec.get('symbol')
+            sector = rec.get('sector') or 'Unknown'
+            if sym:
+                trades_db.update_strategy_data(sym, sector=sector)
 
         print("Start")
         for i, stock in enumerate(self.stocks_list):
@@ -2828,7 +2924,12 @@ class StrategyManager:
         
         # Start strategy threads (starting from thread 1)
         for i, stock in enumerate(self.stocks_list):
-            strategy = Strategy(self, stock, self.broker, self.config)
+            sector = 'Unknown'
+            for rec in self.stocks_dict:
+                if rec.get('symbol') == stock:
+                    sector = rec.get('sector') or 'Unknown'
+                    break
+            strategy = Strategy(self, stock, self.broker, self.config, sector=sector)
             self.strategies.append(strategy)
             
             thread_name = f"Strategy-{i+1}-{stock}"  # Thread numbers start from 1
@@ -3043,16 +3144,18 @@ class StrategyManager:
             
 
 if __name__ == "__main__":
+    lite_restart = "--lite" in sys.argv
+    
     # Set status to initializing
     update_bot_status(True, True)
     
-    print("Caching ADV and RVOL data...")
-    initialize_stock_selector()
+    if not lite_restart:
+        print("Caching ADV and RVOL data...")
+        initialize_stock_selector()
+        print("ADV and RVOL data cached")
     
     # Set status to running (initialization complete)
     update_bot_status(True, False)
-    
-    print("ADV and RVOL data cached")
 
     print("Checking for existing database to backup...")
     trades_db.backup_database()

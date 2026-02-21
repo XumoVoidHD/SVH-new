@@ -8,3 +8,6 @@ pytz>=2022.1
 streamlit-autorefresh>=0.3.1
 psutil>=5.9.0
 ib_insync>=0.9.86
+humanize>=4.0.0
+ibapi
+num2words

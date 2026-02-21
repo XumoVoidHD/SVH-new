@@ -1,11 +1,79 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import pytz
 import json
 import os
+import num2words
 from streamlit_autorefresh import st_autorefresh
+
+
+def number_to_words_display(value, kind="number"):
+    """Format number as words for display. kind in ('number', 'dollars')."""
+    try:
+        if value is None or (isinstance(value, float) and (value != value)):  # NaN
+            return ""
+        if kind == "dollars":
+            return num2words.num2words(float(value), to="currency", currency="USD")
+        return num2words.num2words(int(value))
+    except Exception:
+        return ""
+
+
+def _time_12h_to_24h(hour_12: int, minute: int, am_pm: str) -> time:
+    """Convert 12h (1-12, AM/PM) to 24h datetime.time."""
+    if am_pm == "AM":
+        hour_24 = 0 if hour_12 == 12 else hour_12
+    else:
+        hour_24 = 12 if hour_12 == 12 else hour_12 + 12
+    return time(hour_24, minute)
+
+
+def _time_24h_to_12h(t: time):
+    """Convert 24h time to (hour_12, minute, 'AM'|'PM')."""
+    hour, minute = t.hour, t.minute
+    hour_12 = (hour % 12) or 12
+    am_pm = "AM" if hour < 12 else "PM"
+    return hour_12, minute, am_pm
+
+
+def _time_options_15min_12h():
+    """List of (display string, time) for every 15-min slot in 12h format, e.g. '9:15 AM'."""
+    options = []
+    for h24 in range(24):
+        for m in (0, 15, 30, 45):
+            t = time(h24, m)
+            h12, _, am_pm = _time_24h_to_12h(t)
+            label = f"{h12}:{m:02d} {am_pm}"
+            options.append((label, t))
+    return options
+
+
+def _time_to_nearest_15(t: time) -> time:
+    """Snap time to nearest 15-min slot."""
+    m = t.minute
+    nearest = min([0, 15, 30, 45], key=lambda x: abs(x - m))
+    return time(t.hour, nearest)
+
+
+_TIME_OPTIONS_15 = _time_options_15min_12h()
+
+
+def time_input_12h(label: str, value: time, key_prefix: str, help_text: str = None) -> time:
+    """Single dropdown of 15-min times in 12h (e.g. 9:15 AM); returns time in 24h."""
+    value_15 = _time_to_nearest_15(value)
+    labels = [opt[0] for opt in _TIME_OPTIONS_15]
+    times = [opt[1] for opt in _TIME_OPTIONS_15]
+    try:
+        default_idx = next(i for i, t in enumerate(times) if t == value_15)
+    except StopIteration:
+        default_idx = 0
+    chosen_label = st.selectbox(label, options=labels, index=default_idx, key=key_prefix)
+    if help_text:
+        st.caption(help_text)
+    chosen_idx = labels.index(chosen_label)
+    return times[chosen_idx]
 from helpers.deldb import rename_to_creation_date
 from helpers.reset_positions import close_all_open_positions
 from db.trades_db import trades_db
@@ -21,7 +89,7 @@ st.set_page_config(
 )
 
 st.title("SVH Capital - Dashboard")
-st.markdown("Configuration editor and database viewer for your trading system")
+st.markdown("Configuration editor and dashboard for your trading system")
 st.markdown("---")
 
 # Valid bar sizes matching main.py
@@ -254,17 +322,17 @@ def main():
     
     page = st.sidebar.selectbox(
         "Select Page",
-        ["Database Viewer", "Historical Data", "Configuration Editor", "Raw Configuration"]
+        ["Dashboard", "Historical Data", "Configuration Editor", "Raw Configuration"]
     )
     
-    if page == "Database Viewer":
-        st.header("Database Viewer")
+    if page == "Dashboard":
+        st.header("Dashboard")
         
         # Create tabs for different database views
-        tab1, tab2 = st.tabs(["Simplified DB", "Raw Database"])
+        tab1, tab2 = st.tabs(["Simplified Dashboard", "Raw Database"])
         
         with tab1:
-            st.subheader("Simplified DB View")
+            st.subheader("Simplified Dashboard")
             
             # Initialize session state for database save tracking
             if 'db_saved_simplified' not in st.session_state:
@@ -291,14 +359,14 @@ def main():
             #     st.warning("⚠️ Clear Database before starting! Old data exists.")
             
             # Database management buttons
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                if st.button("Refresh Data", type="primary"):
+                if st.button("Refresh Data", type="secondary", help="Refreshes the dashboard view. Use when numbers aren't updating."):
                     st.rerun()
             
             with col2:
-                if st.button("Start", type="primary", help="Run main.py to start the trading system"):
+                if st.button("Start", type="primary", help="Starts the bot. First runs initialization (about 30 minutes)."):
                     try:
                         # Auto-backup if database has data (backup_database also deletes the original)
                         if db_has_tables:
@@ -331,51 +399,23 @@ def main():
                         st.error(f"❌ Error: {str(e)}")
             
             with col3:
-                if st.button("Save Database", type="secondary", help="Backup the current database", key="save_db_raw"):
+                if st.button("Lite Restart", type="primary", help="Starts the bot without initialization. Use only when restarting the bot.", key="lite_restart_raw"):
                     try:
-                        result = trades_db.backup_database()
-                        if result:
-                            st.session_state.db_saved_simplified = True
-                            st.success("✅ Database backed up successfully!")
-                            st.rerun()
+                        current_dir = os.getcwd()
+                        main_py_path = os.path.join(current_dir, "main.py")
+                        if os.path.exists(main_py_path):
+                            if os.name == 'nt':
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path, '--lite'], shell=True, cwd=current_dir)
+                            else:
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path, '--lite'], cwd=current_dir)
+                            st.success("✅ main.py started (lite).")
                         else:
-                            st.error("❌ Failed to backup database")
+                            st.error("❌ main.py not found!")
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
             
             with col4:
-                if st.button("Clear Database", type="secondary", help="Delete the database file", key="clear_db_raw"):
-                    try:
-                        if os.path.exists('trades.db'):
-                            # Close any existing connections first
-                            try:
-                                conn = get_db_connection()
-                                if conn:
-                                    conn.close()
-                            except:
-                                pass
-                            
-                            # Wait a moment for connections to close
-                            import time
-                            time.sleep(0.1)
-                            
-                            # Try to delete the file
-                            os.remove('trades.db')
-                            st.session_state.db_saved_simplified = False
-                            
-                            # Verify deletion
-                            if not os.path.exists('trades.db'):
-                                st.success("✅ Database deleted successfully!")
-                            else:
-                                st.warning("⚠️ Database file still exists - may be locked by another process")
-                            st.rerun()
-                        else:
-                            st.warning("⚠️ Database file does not exist")
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-            
-            with col5:
-                if st.button("Reset Positions", type="secondary", help="Close all open positions on IBKR and update database", key="reset_positions_raw"):
+                if st.button("Close all open positions", type="secondary", help="Closes all open positions on IBKR and updates the database. Runs independently of the bot. Use before restarting the bot if any positions are open on IBKR.", key="reset_positions_raw"):
                     try:
                         
                         with st.spinner("Closing all open positions on IBKR..."):
@@ -384,6 +424,7 @@ def main():
                         if count > 0:
                             total_pnl = sum(p['pnl'] for p in positions)
                             st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
+                            st.caption(f"({number_to_words_display(count)} positions; {number_to_words_display(total_pnl, 'dollars')})")
                             
                             # Show details of closed positions
                             if positions:
@@ -474,12 +515,15 @@ def main():
                     
                     with col1:
                         st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_unrealized_pnl, "dollars"))
                     
                     with col2:
                         st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_realized_pnl, "dollars"))
                     
                     with col3:
                         st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_combined_pnl, "dollars"))
                     
                     with col4:
                         # Average PnL per Trade (only count trades with shares > 0)
@@ -491,6 +535,7 @@ def main():
                         if total_trades > 0:
                             avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
                             st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
+                            st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
                         else:
                             st.metric("Avg PnL/Trade", "$0.00")
                     
@@ -526,19 +571,23 @@ def main():
                     
                     with col1:
                         st.metric("Current Exposure", f"${total_used_capital:,.2f}")
+                        st.caption(number_to_words_display(total_used_capital, "dollars"))
                     
                     with col2:
                         # Total Portfolio Value = used_capital + unrealized_pnl
                         total_portfolio_value = total_used_capital + total_unrealized_pnl
                         st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
+                        st.caption(number_to_words_display(total_portfolio_value, "dollars"))
                     
                     with col3:
                         # Available Cash = EQUITY - used_capital
                         available_cash = equity - total_used_capital
                         st.metric("Cash Available", f"${available_cash:,.2f}")
+                        st.caption(number_to_words_display(available_cash, "dollars"))
                     
                     with col4:
                         st.metric("Active Positions", active_positions)
+                        st.caption(number_to_words_display(active_positions))
                     
                     # ===== EFFICIENCY & EXECUTION METRICS =====
                     st.markdown("### Efficiency & Execution Metrics")
@@ -559,6 +608,7 @@ def main():
                         if active_positions > 0:
                             avg_trade_size = total_used_capital / active_positions
                             st.metric("Avg Trade Size", f"${avg_trade_size:,.2f}")
+                            st.caption(number_to_words_display(avg_trade_size, "dollars"))
                         else:
                             st.metric("Avg Trade Size", "$0.00")
                     
@@ -567,6 +617,7 @@ def main():
                         if 'shares' in df.columns:
                             trades_executed = len(df[df['shares'] > 0])
                             st.metric("Trades Executed", trades_executed)
+                            st.caption(number_to_words_display(trades_executed))
                         else:
                             st.metric("Trades Executed", 0)
                     
@@ -775,14 +826,14 @@ def main():
             #     st.warning("⚠️ Clear Database before starting! Old data exists.")
             
             # Database management buttons
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                if st.button("Refresh Data", type="primary", key="refresh_raw"):
+                if st.button("Refresh Data", type="secondary", help="Refreshes the dashboard view. Use when numbers aren't updating.", key="refresh_raw"):
                     st.rerun()
             
             with col2:
-                if st.button("Start", type="primary", help="Run main.py to start the trading system", key="start_raw"):
+                if st.button("Start", type="primary", help="Starts the bot. First runs initialization (about 30 minutes).", key="start_raw"):
                     try:
                         # Auto-backup if database has data (backup_database also deletes the original)
                         if db_has_tables_raw:
@@ -815,51 +866,23 @@ def main():
                         st.error(f"Error: {str(e)}")
             
             with col3:
-                if st.button("Save Database", type="secondary", help="Backup the current database", key="save_db_simplified"):
+                if st.button("Lite Restart", type="primary", help="Starts the bot without initialization. Use only when restarting the bot.", key="lite_restart_simplified"):
                     try:
-                        result = trades_db.backup_database()
-                        if result:
-                            st.session_state.db_saved_raw = True
-                            st.success("Database backed up successfully!")
-                            st.rerun()
+                        current_dir = os.getcwd()
+                        main_py_path = os.path.join(current_dir, "main.py")
+                        if os.path.exists(main_py_path):
+                            if os.name == 'nt':
+                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path, '--lite'], shell=True, cwd=current_dir)
+                            else:
+                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path, '--lite'], cwd=current_dir)
+                            st.success("✅ main.py started (lite).")
                         else:
-                            st.error("Failed to backup database")
+                            st.error("❌ main.py not found!")
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"❌ Error: {str(e)}")
             
             with col4:
-                if st.button("Clear Database", type="secondary", help="Delete the database file", key="clear_db_simplified"):
-                    try:
-                        if os.path.exists('trades.db'):
-                            # Close any existing connections first
-                            try:
-                                conn = get_db_connection()
-                                if conn:
-                                    conn.close()
-                            except:
-                                pass
-                            
-                            # Wait a moment for connections to close
-                            import time
-                            time.sleep(0.1)
-                            
-                            # Try to delete the file
-                            os.remove('trades.db')
-                            st.session_state.db_saved_raw = False
-                            
-                            # Verify deletion
-                            if not os.path.exists('trades.db'):
-                                st.success("Database deleted successfully!")
-                            else:
-                                st.warning("Database file still exists - may be locked by another process")
-                            st.rerun()
-                        else:
-                            st.warning("Database file does not exist")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-            
-            with col5:
-                if st.button("Reset Positions", type="secondary", help="Close all open positions on IBKR and update database", key="reset_positions_simplified"):
+                if st.button("Reset Positions", type="secondary", help="Closes all open positions on IBKR and updates the database. Runs independently of the bot. Use before restarting the bot if any positions are open on IBKR.", key="reset_positions_simplified"):
                     try:
                         
                         
@@ -869,6 +892,7 @@ def main():
                         if count > 0:
                             total_pnl = sum(p['pnl'] for p in positions)
                             st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
+                            st.caption(f"({number_to_words_display(count)} positions; {number_to_words_display(total_pnl, 'dollars')})")
                             
                             # Show details of closed positions
                             if positions:
@@ -942,15 +966,19 @@ def main():
                     
                     with col1:
                         st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_unrealized_pnl, "dollars"))
                     
                     with col2:
                         st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_realized_pnl, "dollars"))
                     
                     with col3:
                         st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_combined_pnl, "dollars"))
                     
                     with col4:
                         st.metric("Active Positions", active_positions)
+                        st.caption(number_to_words_display(active_positions))
                     
                     # Additional metrics in a second row
                     col1, col2, col3, col4 = st.columns(4)
@@ -962,6 +990,7 @@ def main():
                         if 'used_capital' in active_df.columns:
                             total_used_capital = active_df['used_capital'].sum()
                             st.metric("Total Capital Deployed", f"${total_used_capital:,.2f}")
+                            st.caption(number_to_words_display(total_used_capital, "dollars"))
                         else:
                             total_used_capital = 0
                     
@@ -979,12 +1008,14 @@ def main():
                         # Total Portfolio Value = used_capital + unrealized_pnl
                         total_portfolio_value = total_used_capital + total_unrealized_pnl
                         st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
+                        st.caption(number_to_words_display(total_portfolio_value, "dollars"))
                     
                     with col4:
                         # Available Cash = EQUITY - used_capital
                         equity = config.get('EQUITY', 0)
                         available_cash = equity - total_used_capital
                         st.metric("Cash Available", f"${available_cash:,.2f}")
+                        st.caption(number_to_words_display(available_cash, "dollars"))
                     
                     # Trading statistics in a third row
                     col1, col2, col3, col4, col5 = st.columns(5)
@@ -1002,6 +1033,7 @@ def main():
                         if active_positions > 0:
                             avg_position_size = total_used_capital / active_positions
                             st.metric("Avg Position Size", f"${avg_position_size:,.2f}")
+                            st.caption(number_to_words_display(avg_position_size, "dollars"))
                         else:
                             st.metric("Avg Position Size", "$0.00")
                     
@@ -1041,6 +1073,7 @@ def main():
                         if total_trades > 0:
                             avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
                             st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
+                            st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
                         else:
                             st.metric("Avg PnL/Trade", "$0.00")
                     
@@ -1066,6 +1099,7 @@ def main():
                         start_idx = (page - 1) * chunk_size
                         end_idx = min(start_idx + chunk_size, total_rows)
                         st.write(f"Showing rows {start_idx + 1} to {end_idx} of {total_rows}")
+                        st.caption(f"({number_to_words_display(total_rows)} total rows)")
                         st.write(df.iloc[start_idx:end_idx])
                     else:
                         st.write(df)
@@ -1102,7 +1136,7 @@ def main():
             st.info("Historical data is automatically backed up when you start main.py")
         else:
             # Create tabs for different views
-            tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Symbol Performance", "File Explorer", "Database Viewer"])
+            tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Database Viewer", "Symbol Performance", "Historical Files"])
             
             with tab1:
                 st.subheader("Summary Statistics")
@@ -1120,7 +1154,10 @@ def main():
                 end_datetime = datetime.combine(end_date, datetime.max.time()) if end_date else None
                 
                 data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
-                st.write(f"Found {len(data) if data else 0} records")
+                record_count = len(data) if data else 0
+                st.write(f"Found {record_count} records")
+                if record_count > 0:
+                    st.caption(f"({number_to_words_display(record_count)} records)")
                 
                 if data:
                     df = pd.DataFrame(data)
@@ -1136,6 +1173,7 @@ def main():
                     
                     with col1:
                         st.metric("Total PnL", f"${total_pnl:,.2f}")
+                        st.caption(number_to_words_display(total_pnl, "dollars"))
                     
                     with col2:
                         # Overall Return % = realized_pnl / cost_basis
@@ -1163,6 +1201,7 @@ def main():
                         if len(df) > 0:
                             avg_position_size = total_cost_basis / len(df)
                             st.metric("Avg Position Size", f"${avg_position_size:,.2f}")
+                            st.caption(number_to_words_display(avg_position_size, "dollars"))
                         else:
                             st.metric("Avg Position Size", "$0.00")
                     
@@ -1186,6 +1225,7 @@ def main():
                         if total_trades > 0:
                             avg_pnl_per_trade = total_pnl / total_trades
                             st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
+                            st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
                         else:
                             st.metric("Avg PnL/Trade", "$0.00")
                     
@@ -1198,6 +1238,7 @@ def main():
                         if len(winning_trades) > 0:
                             avg_win = winning_trades['realized_pnl'].mean()
                             st.metric("Avg Win", f"${avg_win:,.2f}")
+                            st.caption(number_to_words_display(avg_win, "dollars"))
                         else:
                             st.metric("Avg Win", "$0.00")
                     
@@ -1207,6 +1248,7 @@ def main():
                         if len(losing_trades) > 0:
                             avg_loss = losing_trades['realized_pnl'].mean()
                             st.metric("Avg Loss", f"${avg_loss:,.2f}")
+                            st.caption(number_to_words_display(avg_loss, "dollars"))
                         else:
                             st.metric("Avg Loss", "$0.00")
                     
@@ -1264,6 +1306,7 @@ def main():
                     all_trades_display = pd.DataFrame({
                         'Date': df_filtered['data_date'].fillna('N/A') if 'data_date' in df_filtered.columns else 'N/A',
                         'Symbol': df_filtered['symbol'].fillna('N/A') if 'symbol' in df_filtered.columns else 'N/A',
+                        'Score': df_filtered['score'] if 'score' in df_filtered.columns else 0,
                         'Quantity': df_filtered['shares'] if 'shares' in df_filtered.columns else 0,
                         'Entry Price': df_filtered['entry_price'] if 'entry_price' in df_filtered.columns else 0,
                         'Exit Price': df_filtered['current_price'] if 'current_price' in df_filtered.columns else 0,
@@ -1271,6 +1314,7 @@ def main():
                     })
                     
                     # Ensure numeric types for calculations and fill missing values
+                    all_trades_display['Score'] = pd.to_numeric(all_trades_display['Score'], errors='coerce').fillna(0)
                     all_trades_display['Quantity'] = pd.to_numeric(all_trades_display['Quantity'], errors='coerce').fillna(0)
                     all_trades_display['Entry Price'] = pd.to_numeric(all_trades_display['Entry Price'], errors='coerce').fillna(0)
                     all_trades_display['Exit Price'] = pd.to_numeric(all_trades_display['Exit Price'], errors='coerce').fillna(0)
@@ -1292,7 +1336,7 @@ def main():
                     
                     # Select and reorder columns for display
                     display_columns = [
-                        'Date', 'Symbol', 'Quantity', 'Entry Price', 'Exit Price',
+                        'Date', 'Symbol', 'Score', 'Quantity', 'Entry Price', 'Exit Price',
                         'Cost Basis', 'Market Value', 'Realized PnL', 'PnL (%)'
                     ]
                     all_trades_display = all_trades_display[display_columns]
@@ -1332,7 +1376,7 @@ def main():
                         mime="text/csv"
                     )
             
-            with tab2:
+            with tab3:
                 st.subheader("Symbol Performance Analysis")
                 
                 # Date range selector for Symbol Performance
@@ -1348,7 +1392,10 @@ def main():
                 start_datetime = datetime.combine(symbol_start_date, datetime.min.time()) if symbol_start_date else None
                 end_datetime = datetime.combine(symbol_end_date, datetime.max.time()) if symbol_end_date else None
                 all_data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
-                st.write(f"Found {len(all_data) if all_data else 0} records")
+                all_count = len(all_data) if all_data else 0
+                st.write(f"Found {all_count} records")
+                if all_count > 0:
+                    st.caption(f"({number_to_words_display(all_count)} records)")
                 if all_data:
                     df = pd.DataFrame(all_data)
                     symbols = sorted(df['symbol'].unique())
@@ -1562,8 +1609,8 @@ def main():
                 else:
                     st.warning("No historical data available for symbol analysis")
             
-            with tab3:
-                st.subheader("Historical File Explorer")
+            with tab4:
+                st.subheader("Historical Files")
                 
                 # Display all historical files
                 st.write("Available historical database files:")
@@ -1636,6 +1683,7 @@ def main():
                         all_data = trades_db.get_aggregated_data(start_date=start_datetime, end_date=end_datetime)
                         if all_data:
                             st.success(f"Loaded {len(all_data)} records from all historical files")
+                            st.caption(f"({number_to_words_display(len(all_data))} records)")
                             
                             # Export option
                             csv_data = pd.DataFrame(all_data).to_csv(index=False)
@@ -1648,7 +1696,7 @@ def main():
                         else:
                             st.warning("No data found in historical files")
             
-            with tab4:
+            with tab2:
                 st.subheader("Database Viewer")
                 st.markdown("View raw and simplified data from any historical database file")
                 
@@ -1855,7 +1903,7 @@ def main():
                                 simplified_df = simplified_df.copy()
                                 
                                 if not simplified_df.empty:
-                                    # Create simplified DataFrame with calculated columns (same format as main Database Viewer)
+                                    # Create simplified DataFrame with calculated columns (same format as main Dashboard)
                                     simplified_display = pd.DataFrame({
                                         'Symbol': simplified_df['symbol'],
                                         'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
@@ -2119,99 +2167,11 @@ def main():
                                 df_display = df_display.copy()
                                 
                                 if not df_display.empty:
-                                    # Create simplified DataFrame with calculated columns (same format as main Database Viewer)
-                                    simplified_display = pd.DataFrame({
-                                        'Symbol': df_display['symbol'],
-                                        'Active': df_display['position_active'] if 'position_active' in df_display.columns else True,
-                                        'Actual Quantity': df_display['position_shares'] if 'position_shares' in df_display.columns else df_display['shares'],
-                                        'Initial Quantity': df_display['shares'],
-                                        'Entry Price': df_display['entry_price'],
-                                        'Current Price': df_display['current_price'],
-                                        'Unrealized PnL': df_display['unrealized_pnl'],
-                                        'Realized PnL': df_display['realized_pnl'],
-                                        'Score': df_display['score'] if 'score' in df_display.columns else 0,
-                                        'Entry Time': df_display['entry_time'] if 'entry_time' in df_display.columns else 'N/A',
-                                        'Close Time': df_display['close_time'] if 'close_time' in df_display.columns else 'N/A'
-                                    })
-                                    
-                                    # Ensure numeric types for calculations
-                                    simplified_display['Actual Quantity'] = pd.to_numeric(simplified_display['Actual Quantity'], errors='coerce')
-                                    simplified_display['Initial Quantity'] = pd.to_numeric(simplified_display['Initial Quantity'], errors='coerce')
-                                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
-                                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
-                                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
-                                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
-                                    
-                                    # Calculate additional columns using Actual Quantity
-                                    simplified_display['Cost Basis'] = simplified_display['Initial Quantity'] * simplified_display['Entry Price']
-                                    simplified_display['Market Value'] = simplified_display['Actual Quantity'] * simplified_display['Current Price']
-                                    
-                                    # Calculate PnL from raw database fields (same as raw database view)
-                                    calculated_unrealized_pnl = simplified_display['Actual Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
-                                    calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
-                                    
-                                    # Use calculated unrealized PnL + stored realized PnL
-                                    total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
-                                    simplified_display['PnL ($)'] = total_pnl
-                                    
-                                    # Calculate percentage based on total PnL relative to cost basis
-                                    simplified_display['PnL (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
-                                    simplified_display['PnL (%)'] = simplified_display['PnL (%)'].fillna(0)
-                                    
-                                    # Rename columns for display
-                                    simplified_display = simplified_display.rename(columns={
-                                        'Actual Quantity': 'Actual Qty',
-                                        'Initial Quantity': 'Initial Qty'
-                                    })
-                                    
-                                    # Select and reorder columns for display
-                                    display_columns = [
-                                        'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
-                                        'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
-                                    ]
-                                    simplified_display = simplified_display[display_columns]
-                                    
-                                    # Format the data with commas and dollar signs
-                                    def format_currency(value):
-                                        if pd.isna(value):
-                                            return "$0.00"
-                                        return f"${value:,.2f}"
-                                    
-                                    def format_percentage(value):
-                                        if pd.isna(value):
-                                            return "0.00%"
-                                        return f"{value:.2f}%"
-                                    
-                                    # Apply formatting to the display dataframe
-                                    formatted_display = simplified_display.copy()
-                                    formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
-                                    formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
-                                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
-                                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
-                                    formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
-                                    formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
-                                
-                                    # Format time columns to show only HH:MM:SS
-                                    def format_time(time_value):
-                                        if pd.isna(time_value) or time_value == 'N/A' or str(time_value) in ['None', 'nan', '']:
-                                            return 'N/A'
-                                        try:
-                                            # Try to parse as datetime and extract time
-                                            time_obj = pd.to_datetime(time_value)
-                                            return time_obj.strftime('%H:%M:%S')
-                                        except:
-                                            return 'N/A'
-                                    
-                                    formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
-                                    formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
-                                    
-                                    # Display the formatted table
-                                    st.dataframe(formatted_display, use_container_width=True)
-                                    
-                                    # Download button for calculated data (before formatting, so numbers are preserved)
-                                    csv_data = simplified_display.to_csv(index=False)
+                                    # Show raw database table (all columns)
+                                    st.dataframe(df_display, use_container_width=True)
+                                    csv_data = df_display.to_csv(index=False)
                                     st.download_button(
-                                        label="Download Data as CSV",
+                                        label="Download Raw Data as CSV",
                                         data=csv_data,
                                         file_name=f"raw_{selected_file['filename'].replace('.db', '.csv')}",
                                         mime="text/csv"
@@ -2248,6 +2208,7 @@ def main():
                     step=100_000_000,
                     help="Minimum market capitalization in dollars"
                 )
+                st.caption(f"≈ {number_to_words_display(market_cap_min, 'dollars')}")
             with col2:
                 price_min = st.number_input(
                     "Minimum Price ($):", 
@@ -2257,6 +2218,7 @@ def main():
                     step=0.5,
                     help="Minimum stock price in dollars"
                 )
+                st.caption(f"≈ {number_to_words_display(price_min, 'dollars')}")
             
             st.markdown("---")
             # ADV Configuration
@@ -2279,6 +2241,7 @@ def main():
                     step=50_000,
                     help="Minimum average daily volume for large cap stocks"
                 )
+                st.caption(f"≈ {number_to_words_display(adv_large)}")
             with col2:
                 adv_small_length = st.number_input(
                     "ADV Small Length (days):", 
@@ -2296,6 +2259,7 @@ def main():
                     step=50_000,
                     help="Minimum average daily volume for small cap stocks"
                 )
+                st.caption(f"≈ {number_to_words_display(adv_small)}")
             
             st.markdown("---")
             # RVOL Configuration
@@ -2316,8 +2280,8 @@ def main():
                     min_value=0.5, 
                     max_value=5.0, 
                     value=float(stock_config.get('RVOL_filter', 1.3)), 
-                    step=0.1,
-                    format="%.1f",
+                    step=0.01,
+                    format="%.2f",
                     help="Minimum relative volume multiplier (e.g., 1.3 = 130% of average volume)"
                 )
             
@@ -2328,10 +2292,10 @@ def main():
             with col1:
                 stock_alpha_threshold = st.number_input(
                     "5-Day Alpha Threshold:", 
-                    min_value=0.00001, 
-                    max_value=0.01, 
+                    min_value=0.0001, 
+                    max_value=1.0, 
                     value=float(stock_config.get('alpha_threshold', 0.005)), 
-                    step=0.0001,
+                    step=0.001,
                     format="%.3f",
                     help="Minimum 5-day alpha return to qualify (as decimal, e.g., 0.005 = 0.5%)"
                 )
@@ -2426,7 +2390,7 @@ def main():
             with col1:
                 volume_weight = st.number_input("Volume/Volatility Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('weight', 20), 1, key="volume_weight")
                 volume_spike_weight = st.number_input("Volume Spike Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('weight', 10), 1, key="volume_spike_weight")
-                volume_spike_multiplier = st.number_input("Volume Multiplier:", 0.5, 5.0, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('multiplier', 1.5), 0.1, key="volume_spike_mult")
+                volume_spike_multiplier = st.number_input("Volume Multiplier:", 0.5, 5.0, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('multiplier', 1.5), 0.01, key="volume_spike_mult")
             with col2:
                 adx_weight = st.number_input("ADX Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('weight', 10), 1, key="adx_weight")
                 adx_threshold = st.number_input("ADX Threshold:", 10, 50, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('adx_threshold', {}).get('threshold', 20), 1, key="adx_threshold")
@@ -3218,13 +3182,15 @@ def main():
             
             with col1:
                 st.write("**Market Hours**")
-                market_open = st.time_input(
-                    "Market Open:", 
-                    value=datetime.strptime(trading_hours_config.get('market_open', '09:30'), "%H:%M").time()
+                market_open = time_input_12h(
+                    "Market Open:",
+                    datetime.strptime(trading_hours_config.get('market_open', '09:30'), "%H:%M").time(),
+                    key_prefix="market_open",
                 )
-                market_close = st.time_input(
-                    "Market Close:", 
-                    value=datetime.strptime(trading_hours_config.get('market_close', '16:00'), "%H:%M").time()
+                market_close = time_input_12h(
+                    "Market Close:",
+                    datetime.strptime(trading_hours_config.get('market_close', '16:00'), "%H:%M").time(),
+                    key_prefix="market_close",
                 )
                 # Timezone options with US/Eastern as primary option
                 timezone_options = ["US/Eastern", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"]
@@ -3250,21 +3216,25 @@ def main():
             
             with col2:
                 st.write("**Entry Windows**")
-                morning_start = st.time_input(
-                    "Morning Entry Start:", 
-                    value=datetime.strptime(trading_hours_config.get('morning_entry_start', '10:00'), "%H:%M").time()
+                morning_start = time_input_12h(
+                    "Morning Entry Start:",
+                    datetime.strptime(trading_hours_config.get('morning_entry_start', '10:00'), "%H:%M").time(),
+                    key_prefix="morning_start",
                 )
-                morning_end = st.time_input(
-                    "Morning Entry End:", 
-                    value=datetime.strptime(trading_hours_config.get('morning_entry_end', '11:15'), "%H:%M").time()
+                morning_end = time_input_12h(
+                    "Morning Entry End:",
+                    datetime.strptime(trading_hours_config.get('morning_entry_end', '11:15'), "%H:%M").time(),
+                    key_prefix="morning_end",
                 )
-                afternoon_start = st.time_input(
-                    "Afternoon Entry Start:", 
-                    value=datetime.strptime(trading_hours_config.get('afternoon_entry_start', '13:30'), "%H:%M").time()
+                afternoon_start = time_input_12h(
+                    "Afternoon Entry Start:",
+                    datetime.strptime(trading_hours_config.get('afternoon_entry_start', '13:30'), "%H:%M").time(),
+                    key_prefix="afternoon_start",
                 )
-                afternoon_end = st.time_input(
-                    "Afternoon Entry End:", 
-                    value=datetime.strptime(trading_hours_config.get('afternoon_entry_end', '14:30'), "%H:%M").time()
+                afternoon_end = time_input_12h(
+                    "Afternoon Entry End:",
+                    datetime.strptime(trading_hours_config.get('afternoon_entry_end', '14:30'), "%H:%M").time(),
+                    key_prefix="afternoon_end",
                 )
             
             # Exit Times Configuration
@@ -3273,24 +3243,27 @@ def main():
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                weak_exit_time = st.time_input(
-                    "Weak Exit Time:", 
-                    value=datetime.strptime(trading_hours_config.get('weak_exit_time', '15:30'), "%H:%M").time(),
-                    help="Time to exit weak positions (-0.3% to +1.2%)"
+                weak_exit_time = time_input_12h(
+                    "Weak Exit Time:",
+                    datetime.strptime(trading_hours_config.get('weak_exit_time', '15:30'), "%H:%M").time(),
+                    key_prefix="weak_exit",
+                    help_text="Time to exit weak positions (-0.3% to +1.2%)",
                 )
             
             with col2:
-                hedge_force_exit_time = st.time_input(
-                    "Hedge Force Exit Time:", 
-                    value=datetime.strptime(trading_hours_config.get('hedge_force_exit_time', '15:55'), "%H:%M").time(),
-                    help="Time to force close all hedge positions"
+                hedge_force_exit_time = time_input_12h(
+                    "Hedge Force Exit Time:",
+                    datetime.strptime(trading_hours_config.get('hedge_force_exit_time', '15:55'), "%H:%M").time(),
+                    key_prefix="hedge_force_exit",
+                    help_text="Time to force close all hedge positions",
                 )
             
             with col3:
-                safety_exit_time = st.time_input(
-                    "Safety Exit Time:", 
-                    value=datetime.strptime(trading_hours_config.get('safety_exit_time', '15:55'), "%H:%M").time(),
-                    help="Time to force close all positions"
+                safety_exit_time = time_input_12h(
+                    "Safety Exit Time:",
+                    datetime.strptime(trading_hours_config.get('safety_exit_time', '15:55'), "%H:%M").time(),
+                    key_prefix="safety_exit",
+                    help_text="Time to force close all positions",
                 )
             
             # Weak Position Configuration
@@ -3339,12 +3312,14 @@ def main():
                 step=10000,
                 key="equity_global"
             )
+            st.caption(f"≈ {number_to_words_display(equity, 'dollars')}")
         with col2:
-            testing = st.checkbox(
-                "Testing Mode Enabled", 
-                value=config.get('TESTING', False),
-                key="testing_global"
-            )
+            # testing = st.checkbox(
+            #     "Testing Mode Enabled", 
+            #     value=config.get('TESTING', False),
+            #     key="testing_global"
+            # )
+            testing = False
         
         if st.button("Save All Configuration", type="primary", key="save_all_config"):
             # Update configuration with all values from tabs

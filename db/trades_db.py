@@ -174,12 +174,28 @@ class TradesDatabase:
                         hedge_entry_price REAL DEFAULT 0,
                         hedge_entry_time TIMESTAMP,
                         hedge_exit_price REAL DEFAULT 0,
-                        hedge_pnl REAL DEFAULT 0
+                        hedge_pnl REAL DEFAULT 0,
+                        indicator_values TEXT,
+                        criteria_passed TEXT,
+                        sector TEXT
                     )
                 ''')
                 
                 conn.commit()
                 print("Database table 'stock_strategies' created successfully")
+                
+                # Migration: add new columns if table already existed without them
+                cursor.execute("PRAGMA table_info(stock_strategies)")
+                cols = [row[1] for row in cursor.fetchall()]
+                if 'indicator_values' not in cols:
+                    cursor.execute("ALTER TABLE stock_strategies ADD COLUMN indicator_values TEXT")
+                    conn.commit()
+                if 'criteria_passed' not in cols:
+                    cursor.execute("ALTER TABLE stock_strategies ADD COLUMN criteria_passed TEXT")
+                    conn.commit()
+                if 'sector' not in cols:
+                    cursor.execute("ALTER TABLE stock_strategies ADD COLUMN sector TEXT")
+                    conn.commit()
                 
                 # Verify table was created
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
@@ -435,7 +451,9 @@ class TradesDatabase:
                     'losing_trades', 'total_pnl', 'avg_trade_duration',
                     'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
                     'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
-                    'hedge_exit_price', 'hedge_pnl'
+                    'hedge_exit_price', 'hedge_pnl',
+                    'indicator_values', 'criteria_passed',
+                    'sector'
                 ]:
                     update_fields.append(f"{key} = ?")
                     values.append(value)
@@ -490,14 +508,16 @@ class TradesDatabase:
                 'losing_trades', 'total_pnl', 'avg_trade_duration',
                 'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
                 'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
-                'hedge_exit_price', 'hedge_pnl'
+                'hedge_exit_price', 'hedge_pnl',
+                'indicator_values', 'criteria_passed',
+                'sector'
             ]:
                 fields.append(key)
                 # Convert datetime objects to string if needed
                 if isinstance(value, datetime):
                     values.append(value.isoformat())
                 elif isinstance(value, (dict, list)):
-                    values.append(json.dumps(value))
+                    values.append(json.dumps(value) if value is not None else None)
                 elif isinstance(value, bool):
                     # Ensure boolean values are stored as integers (0/1) in SQLite
                     values.append(1 if value else 0)
@@ -585,6 +605,26 @@ class TradesDatabase:
             except Exception as e:
                 print(f"Error getting active positions: {e}")
                 return []
+            finally:
+                conn.close()
+    
+    def get_sector_used_capital(self):
+        """Get used_capital summed by sector for active positions. Returns dict sector_name -> total_used_capital."""
+        with self.lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    SELECT COALESCE(sector, 'Unknown') AS sector, SUM(used_capital) AS total
+                    FROM stock_strategies
+                    WHERE position_active = 1 AND used_capital > 0
+                    GROUP BY COALESCE(sector, 'Unknown')
+                ''')
+                rows = cursor.fetchall()
+                return {row[0]: float(row[1] or 0) for row in rows}
+            except Exception as e:
+                print(f"Error getting sector used capital: {e}")
+                return {}
             finally:
                 conn.close()
     
