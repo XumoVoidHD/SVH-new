@@ -77,7 +77,7 @@
     },
     "ALPHA_SCORE_CONFIG": {
         "trend": {
-            "weight": 30,
+            "weight": 35,
             "conditions": {
                 "ema_cross": {
                     "weight": 15
@@ -85,7 +85,7 @@
             }
         },
         "momentum": {
-            "weight": 20,
+            "weight": 25,
             "conditions": {
                 "macd_positive": {
                     "weight": 20
@@ -93,7 +93,7 @@
             }
         },
         "volume_volatility": {
-            "weight": 20,
+            "weight": 25,
             "conditions": {
                 "volume_spike": {
                     "weight": 10,
@@ -106,10 +106,10 @@
             }
         },
         "news": {
-            "weight": 15,
+            "weight": 0,
             "conditions": {
                 "no_major_news": {
-                    "weight": 15
+                    "weight": 0
                 }
             }
         },
@@ -130,8 +130,6 @@
         "max_position_equity_pct": 0.1,
         "max_daily_trades": 10,
         "daily_drawdown_limit": 0.02,
-        "monthly_drawdown_limit": 0.08,
-        "drawdown_alert": 0.015,
         "lower_limit": 0.02,
         "upper_limit": 0.03,
         "atr_multiplier": 1.5

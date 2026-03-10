@@ -8,6 +8,85 @@ import os
 import num2words
 from streamlit_autorefresh import st_autorefresh
 
+# Ordered columns for expanded indicator/criteria: indicator(s) then criteria that use them (main dashboard simplified view)
+INDICATOR_CRITERIA_COLUMN_ORDER = [
+    "vwap", "ema1", "ema2", "trend_passed", "price_above_vwap", "ema_cross",
+    "vwap_slope", "vwap_slope_passed",
+    "macd", "momentum_passed",
+    "volume", "volume_avg", "adx", "volume_volatility_passed", "volume_spike", "adx_above_threshold",
+    "volume_recent", "volume_avg_addl", "volume_check_passed",
+    "vix", "market_calm_passed", "vix_low", "vix_dropping",
+    "trin", "tick_ma", "trin_tick_passed",
+    "news_passed",
+]
+
+# Display names for indicator/criteria columns (ema1=Fast, ema2=Slow per config)
+INDICATOR_CRITERIA_DISPLAY_NAMES = {
+    "vwap": "VWAP",
+    "ema1": "Fast EMA",
+    "ema2": "Slow EMA",
+    "vwap_slope": "VWAP Slope",
+    "trend_passed": "Trend Confirmed",
+    "price_above_vwap": "Price Above VWAP",
+    "ema_cross": "Bullish EMA Crossover",
+    "vwap_slope_passed": "VWAP Rising",
+    "macd": "MACD Value",
+    "momentum_passed": "MACD Momentum",
+    "volume": "Current Volume",
+    "volume_avg": "Avg Volume",
+    "volume_recent": "Recent Volume",
+    "volume_avg_addl": "Secondary Volume Avg",
+    "volume_spike": "Volume Spike",
+    "volume_volatility_passed": "Volume Volatility",
+    "volume_check_passed": "Volume Quality",
+    "adx": "ADX",
+    "adx_above_threshold": "Trend Strength (ADX)",
+    "vix": "VIX",
+    "vix_low": "VIX Below Danger Zone",
+    "vix_dropping": "VIX Trending Down",
+    "market_calm_passed": "Market Calm",
+    "trin": "TRIN / Arms Index",
+    "tick_ma": "TICK Moving Average",
+    "trin_tick_passed": "Market Breadth Positive (TRIN+TICK)",
+    "news_passed": "No Adverse News",
+}
+
+
+def _expand_indicator_criteria_columns(indicator_values_series, criteria_passed_series):
+    """Build a DataFrame with one column per indicator/criterion, grouped (indicator then related criteria)."""
+    criteria_keys = {
+        "trend_passed", "price_above_vwap", "ema_cross", "vwap_slope_passed", "momentum_passed",
+        "volume_volatility_passed", "volume_spike", "adx_above_threshold", "volume_check_passed",
+        "market_calm_passed", "vix_low", "vix_dropping", "trin_tick_passed", "news_passed",
+    }
+    out = {}
+    for key in INDICATOR_CRITERIA_COLUMN_ORDER:
+        out[key] = []
+    for i in range(len(indicator_values_series)):
+        try:
+            ind = json.loads(indicator_values_series.iloc[i]) if pd.notna(indicator_values_series.iloc[i]) and str(indicator_values_series.iloc[i]).strip() else {}
+        except Exception:
+            ind = {}
+        try:
+            cr = json.loads(criteria_passed_series.iloc[i]) if pd.notna(criteria_passed_series.iloc[i]) and str(criteria_passed_series.iloc[i]).strip() else {}
+        except Exception:
+            cr = {}
+        for key in INDICATOR_CRITERIA_COLUMN_ORDER:
+            if key in criteria_keys:
+                v = cr.get(key)
+                out[key].append(bool(v) if v is True or v is False else False)
+            else:
+                v = ind.get(key)
+                if v is None:
+                    out[key].append("")
+                elif isinstance(v, bool):
+                    out[key].append(bool(v))
+                elif isinstance(v, (int, float)):
+                    out[key].append(round(float(v), 2) if abs(float(v)) < 1e6 else round(float(v), 0))
+                else:
+                    out[key].append(str(v))
+    return pd.DataFrame(out)
+
 
 def number_to_words_display(value, kind="number"):
     """Format number as words for display. kind in ('number', 'dollars')."""
@@ -203,8 +282,9 @@ def load_config():
                     "max_position_equity_pct": 0.1,
                     "max_daily_trades": 10,
                     "daily_drawdown_limit": 0.02,
-                    "monthly_drawdown_limit": 0.08,
-                    "drawdown_alert": 0.015
+                    "lower_limit": 0.02,
+                    "upper_limit": 0.03,
+                    "atr_multiplier": 1.5
                 },
                 "TRADING_HOURS": {
                     "market_open": "09:30",
@@ -328,800 +408,500 @@ def main():
     if page == "Dashboard":
         st.header("Dashboard")
         
-        # Create tabs for different database views
-        tab1, tab2 = st.tabs(["Simplified Dashboard", "Raw Database"])
+        # Initialize session state for database save tracking
+        if 'db_saved_simplified' not in st.session_state:
+            st.session_state.db_saved_simplified = False
         
-        with tab1:
-            st.subheader("Simplified Dashboard")
-            
-            # Initialize session state for database save tracking
-            if 'db_saved_simplified' not in st.session_state:
-                st.session_state.db_saved_simplified = False
-            
-            # Check if database has tables
-            def has_database_tables():
-                try:
-                    if not os.path.exists('trades.db'):
-                        return False
-                    conn = sqlite3.connect('trades.db')
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                    tables = cursor.fetchall()
-                    conn.close()
-                    return len(tables) > 0
-                except:
+        # Check if database has tables
+        def has_database_tables():
+            try:
+                if not os.path.exists('trades.db'):
                     return False
-            
-            db_has_tables = has_database_tables()
-            
-            # # Show appropriate warnings
-            # if db_has_tables:
-            #     st.warning("⚠️ Clear Database before starting! Old data exists.")
-            
-            # Database management buttons
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                if st.button("Refresh Data", type="secondary", help="Refreshes the dashboard view. Use when numbers aren't updating."):
-                    st.rerun()
-            
-            with col2:
-                if st.button("Start", type="primary", help="Starts the bot. First runs initialization (about 30 minutes)."):
-                    try:
-                        # Auto-backup if database has data (backup_database also deletes the original)
-                        if db_has_tables:
-                            st.info("📦 Backing up existing database...")
-                            backup_result = trades_db.backup_database()
-                            if backup_result:
-                                st.success("✅ Database backed up and cleared! Starting system...")
-                            else:
-                                st.error("❌ Failed to backup database. Not starting.")
-                                st.stop()
-                        
-                        # Get the current directory
-                        current_dir = os.getcwd()
-                        main_py_path = os.path.join(current_dir, "main.py")
-                        
-                        if os.path.exists(main_py_path):
-                            # Open main.py in a new terminal window/process
-                            if os.name == 'nt':  # Windows
-                                # Use a simpler approach for Windows to avoid path issues
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
-                                            shell=True, cwd=current_dir)
-                            else:  # Linux/Mac
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
-                                            cwd=current_dir)
-                            
-                        else:
-                            st.error("❌ main.py not found!")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-            
-            with col3:
-                if st.button("Lite Restart", type="primary", help="Starts the bot without initialization. Use only when restarting the bot.", key="lite_restart_raw"):
-                    try:
-                        current_dir = os.getcwd()
-                        main_py_path = os.path.join(current_dir, "main.py")
-                        if os.path.exists(main_py_path):
-                            if os.name == 'nt':
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path, '--lite'], shell=True, cwd=current_dir)
-                            else:
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path, '--lite'], cwd=current_dir)
-                            st.success("✅ main.py started (lite).")
-                        else:
-                            st.error("❌ main.py not found!")
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-            
-            with col4:
-                if st.button("Close all open positions", type="secondary", help="Closes all open positions on IBKR and updates the database. Runs independently of the bot. Use before restarting the bot if any positions are open on IBKR.", key="reset_positions_raw"):
-                    try:
-                        
-                        with st.spinner("Closing all open positions on IBKR..."):
-                            count, positions = close_all_open_positions()
-                        
-                        if count > 0:
-                            total_pnl = sum(p['pnl'] for p in positions)
-                            st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
-                            st.caption(f"({number_to_words_display(count)} positions; {number_to_words_display(total_pnl, 'dollars')})")
-                            
-                            # Show details of closed positions
-                            if positions:
-                                st.write("**Closed Positions:**")
-                                for pos in positions:
-                                    st.write(f"- {pos['symbol']}: {pos['shares']} shares, PnL: ${pos['pnl']:.2f}")
-                            
-                            st.rerun()
-                        else:
-                            st.info("No open positions found to close")
-                            
-                    except Exception as e:
-                        st.error(f"Error closing positions: {str(e)}")
-            
-            # Connect to database
-            conn = get_db_connection()
-            if not conn:
-                st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
-                return
-            
-            # Check if stock_strategies table exists
-            table_info = get_table_info(conn)
-            if 'stock_strategies' not in table_info:
-                st.error("❌ The 'stock_strategies' table does not exist in the database.")
-                st.info("💡 This usually means the database hasn't been properly initialized. Try running the main trading application first.")
+                conn = sqlite3.connect('trades.db')
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
                 conn.close()
-                return
-            
-            # Get data from stock_strategies table (main table in trades.db)
-            data, column_names = get_all_data(conn, 'stock_strategies')
-            
-            if data:
-                # Convert to DataFrame and display
-                df = pd.DataFrame(data, columns=column_names)
-                
-                # Fix data type issues for Streamlit compatibility
-                # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
-                datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
-                for col in datetime_columns:
-                    if col in df.columns:
-                        try:
-                            df[col] = pd.to_datetime(df[col], errors='coerce')
-                        except Exception:
-                            # If conversion fails, keep as string but clean it
-                            df[col] = df[col].astype(str)
-                
-                # Convert boolean columns from bytes/ints to proper booleans
-                boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
-                for col in boolean_columns:
-                    if col in df.columns:
-                        # Convert bytes/ints to boolean
-                        df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
-                
-                # Convert numeric columns to proper types
-                numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
-                                'take_profit_price', 'used_capital', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
-                                'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
-                for col in numeric_columns:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                
-                # Add summary row for PnL if the table has unrealized_pnl column
-                if 'unrealized_pnl' in df.columns:
-                    # Filter for active positions only for unrealized PnL calculation
-                    active_df = df[df['position_active'] == True] if 'position_active' in df.columns else df
+                return len(tables) > 0
+            except:
+                return False
+        
+        db_has_tables = has_database_tables()
+        
+        # # Show appropriate warnings
+        # if db_has_tables:
+        #     st.warning("⚠️ Clear Database before starting! Old data exists.")
+        
+        # Database management buttons
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button("Refresh Data", type="secondary", help="Refreshes the dashboard view. Use when numbers aren't updating."):
+                st.rerun()
+        
+        with col2:
+            if st.button("Start", type="primary", help="Starts the bot. First runs initialization (about 30 minutes)."):
+                try:
+                    # Auto-backup if database has data (backup_database also deletes the original)
+                    if db_has_tables:
+                        st.info("📦 Backing up existing database...")
+                        backup_result = trades_db.backup_database()
+                        if backup_result:
+                            st.success("✅ Database backed up and cleared! Starting system...")
+                        else:
+                            st.error("❌ Failed to backup database. Not starting.")
+                            st.stop()
                     
-                    # Calculate unrealized PnL from raw database fields (active positions only)
-                    calculated_unrealized = (active_df['current_price'] - active_df['entry_price']) * active_df['position_shares']
-                    total_unrealized_pnl = calculated_unrealized.sum()
+                    # Get the current directory
+                    current_dir = os.getcwd()
+                    main_py_path = os.path.join(current_dir, "main.py")
                     
-                    # Calculate realized PnL from ALL positions (active + closed)
-                    total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
-                    total_combined_pnl = total_unrealized_pnl + total_realized_pnl
-                    active_positions = len(active_df)
-                    
-                    # Get equity for calculations
-                    equity = config.get('EQUITY', 0)
-                    
-                    # Calculate total used capital
-                    if 'used_capital' in active_df.columns:
-                        total_used_capital = active_df['used_capital'].sum()
+                    if os.path.exists(main_py_path):
+                        # Open main.py in a new terminal window/process
+                        if os.name == 'nt':  # Windows
+                            # Use a simpler approach for Windows to avoid path issues
+                            subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
+                                        shell=True, cwd=current_dir)
+                        else:  # Linux/Mac
+                            subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
+                                        cwd=current_dir)
+                        
                     else:
-                        total_used_capital = 0
-                    
-                    # ===== PROFITABILITY METRICS =====
-                    st.markdown("### Profitability Metrics")
-                    col1, col2, col3, col4, col5, col6 = st.columns(6)
-                    
-                    with col1:
-                        st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_unrealized_pnl, "dollars"))
-                    
-                    with col2:
-                        st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_realized_pnl, "dollars"))
-                    
-                    with col3:
-                        st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_combined_pnl, "dollars"))
-                    
-                    with col4:
-                        # Average PnL per Trade (only count trades with shares > 0)
-                        if 'shares' in df.columns:
-                            executed_trades = df[df['shares'] > 0]
-                            total_trades = len(executed_trades)
+                        st.error("❌ main.py not found!")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        with col3:
+            if st.button(
+                "Lite Restart",
+                type="primary",
+                help="""Restart trading logic only (skips the 30-min stock selection). Before using Lite Restart, first close the terminal running the previous script (INFO, date time) , then click "close all open positions" from the dashboard, and only after that press Lite Restart. This ensures the bot restarts cleanly without any running processes or active trades.""",
+                key="lite_restart_raw",
+            ):
+                try:
+                    current_dir = os.getcwd()
+                    main_py_path = os.path.join(current_dir, "main.py")
+                    if os.path.exists(main_py_path):
+                        if os.name == 'nt':
+                            subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path, '--lite'], shell=True, cwd=current_dir)
                         else:
-                            total_trades = len(df)
-                        if total_trades > 0:
-                            avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
-                            st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
-                            st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
-                        else:
-                            st.metric("Avg PnL/Trade", "$0.00")
+                            subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path, '--lite'], cwd=current_dir)
+                        st.success("✅ main.py started (lite).")
+                    else:
+                        st.error("❌ main.py not found!")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        with col4:
+            if st.button(
+                "Close all open positions",
+                type="secondary",
+                help="""Sends market close orders for all open IBKR positions and syncs trades.db. Run this "before" changing any configuration settings or restarting the bot whenever positions are open.""",
+                key="reset_positions_raw",
+            ):
+                try:
                     
-                    with col5:
-                        # Profit Factor = gross profit / gross loss
-                        gross_profit = df[df['realized_pnl'] > 0]['realized_pnl'].sum()
-                        gross_loss = abs(df[df['realized_pnl'] < 0]['realized_pnl'].sum())
-                        if gross_loss > 0:
-                            profit_factor = gross_profit / gross_loss
-                            st.metric("Profit Factor", f"{profit_factor:.2f}")
-                        else:
-                            st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
+                    with st.spinner("Closing all open positions on IBKR..."):
+                        count, positions = close_all_open_positions()
                     
-                    with col6:
-                        # Win Rate % = (profitable closed positions / total closed positions) * 100
-                        # Closed positions are those where position_shares = 0
-                        closed_positions = df[df['position_shares'] == 0] if 'position_shares' in df.columns else pd.DataFrame()
-                        if len(closed_positions) > 0:
-                            profitable_closed = len(closed_positions[closed_positions['realized_pnl'] > 0])
-                            losing_closed = len(closed_positions[closed_positions['realized_pnl'] < 0])
-                            total_closed = profitable_closed + losing_closed
-                            if total_closed > 0:
-                                win_rate = (profitable_closed / total_closed) * 100
-                                st.metric("Win Rate %", f"{win_rate:.2f}%")
-                            else:
-                                st.metric("Win Rate %", "N/A")
+                    if count > 0:
+                        total_pnl = sum(p['pnl'] for p in positions)
+                        st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
+                        st.caption(f"({number_to_words_display(count)} positions; {number_to_words_display(total_pnl, 'dollars')})")
+                        
+                        # Show details of closed positions
+                        if positions:
+                            st.write("**Closed Positions:**")
+                            for pos in positions:
+                                st.write(f"- {pos['symbol']}: {pos['shares']} shares, PnL: ${pos['pnl']:.2f}")
+                        
+                        st.rerun()
+                    else:
+                        st.info("No open positions found to close")
+                        
+                except Exception as e:
+                    st.error(f"Error closing positions: {str(e)}")
+        
+        # Connect to database
+        conn = get_db_connection()
+        if not conn:
+            st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
+            return
+        
+        # Check if stock_strategies table exists
+        table_info = get_table_info(conn)
+        if 'stock_strategies' not in table_info:
+            st.error("❌ The 'stock_strategies' table does not exist in the database.")
+            st.info("💡 This usually means the database hasn't been properly initialized. Try running the main trading application first.")
+            conn.close()
+            return
+        
+        # Get data from stock_strategies table (main table in trades.db)
+        data, column_names = get_all_data(conn, 'stock_strategies')
+        
+        if data:
+            # Convert to DataFrame and display
+            df = pd.DataFrame(data, columns=column_names)
+            
+            # Fix data type issues for Streamlit compatibility
+            # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
+            datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
+            for col in datetime_columns:
+                if col in df.columns:
+                    try:
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    except Exception:
+                        # If conversion fails, keep as string but clean it
+                        df[col] = df[col].astype(str)
+            
+            # Convert boolean columns from bytes/ints to proper booleans
+            boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
+            for col in boolean_columns:
+                if col in df.columns:
+                    # Convert bytes/ints to boolean
+                    df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
+            
+            # Convert numeric columns to proper types
+            numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
+                            'take_profit_price', 'used_capital', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
+                            'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+            # Add summary row for PnL if the table has unrealized_pnl column
+            if 'unrealized_pnl' in df.columns:
+                # Filter for active positions only for unrealized PnL calculation
+                active_df = df[df['position_active'] == True] if 'position_active' in df.columns else df
+                
+                # Calculate unrealized PnL from raw database fields (active positions only)
+                calculated_unrealized = (active_df['current_price'] - active_df['entry_price']) * active_df['position_shares']
+                total_unrealized_pnl = calculated_unrealized.sum()
+                
+                # Calculate realized PnL from ALL positions (active + closed)
+                total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
+                total_combined_pnl = total_unrealized_pnl + total_realized_pnl
+                active_positions = len(active_df)
+                
+                # Get equity for calculations
+                equity = config.get('EQUITY', 0)
+                
+                # Calculate total used capital
+                if 'used_capital' in active_df.columns:
+                    total_used_capital = active_df['used_capital'].sum()
+                else:
+                    total_used_capital = 0
+                
+                # ===== PROFITABILITY METRICS =====
+                st.markdown("### Profitability Metrics")
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                
+                with col1:
+                    st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
+                    st.caption(number_to_words_display(total_unrealized_pnl, "dollars"))
+                
+                with col2:
+                    st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
+                    st.caption(number_to_words_display(total_realized_pnl, "dollars"))
+                
+                with col3:
+                    st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
+                    st.caption(number_to_words_display(total_combined_pnl, "dollars"))
+                
+                with col4:
+                    # Average PnL per Trade (only count trades with shares > 0)
+                    if 'shares' in df.columns:
+                        executed_trades = df[df['shares'] > 0]
+                        total_trades = len(executed_trades)
+                    else:
+                        total_trades = len(df)
+                    if total_trades > 0:
+                        avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
+                        st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
+                        st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
+                    else:
+                        st.metric("Avg PnL/Trade", "$0.00")
+                
+                with col5:
+                    # Profit Factor = gross profit / gross loss
+                    gross_profit = df[df['realized_pnl'] > 0]['realized_pnl'].sum()
+                    gross_loss = abs(df[df['realized_pnl'] < 0]['realized_pnl'].sum())
+                    if gross_loss > 0:
+                        profit_factor = gross_profit / gross_loss
+                        st.metric("Profit Factor", f"{profit_factor:.2f}")
+                    else:
+                        st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
+                
+                with col6:
+                    # Win Rate % = (profitable closed positions / total closed positions) * 100
+                    # Closed positions are those where position_shares = 0
+                    closed_positions = df[df['position_shares'] == 0] if 'position_shares' in df.columns else pd.DataFrame()
+                    if len(closed_positions) > 0:
+                        profitable_closed = len(closed_positions[closed_positions['realized_pnl'] > 0])
+                        losing_closed = len(closed_positions[closed_positions['realized_pnl'] < 0])
+                        total_closed = profitable_closed + losing_closed
+                        if total_closed > 0:
+                            win_rate = (profitable_closed / total_closed) * 100
+                            st.metric("Win Rate %", f"{win_rate:.2f}%")
                         else:
                             st.metric("Win Rate %", "N/A")
-                    
-                    # ===== CAPITAL & EXPOSURE METRICS =====
-                    st.markdown("### Capital & Exposure Metrics")
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Current Exposure", f"${total_used_capital:,.2f}")
-                        st.caption(number_to_words_display(total_used_capital, "dollars"))
-                    
-                    with col2:
-                        # Total Portfolio Value = used_capital + unrealized_pnl
-                        total_portfolio_value = total_used_capital + total_unrealized_pnl
-                        st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
-                        st.caption(number_to_words_display(total_portfolio_value, "dollars"))
-                    
-                    with col3:
-                        # Available Cash = EQUITY - used_capital
-                        available_cash = equity - total_used_capital
-                        st.metric("Cash Available", f"${available_cash:,.2f}")
-                        st.caption(number_to_words_display(available_cash, "dollars"))
-                    
-                    with col4:
-                        st.metric("Active Positions", active_positions)
-                        st.caption(number_to_words_display(active_positions))
-                    
-                    # ===== EFFICIENCY & EXECUTION METRICS =====
-                    st.markdown("### Efficiency & Execution Metrics")
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    
-                    with col1:
-                        # Calculate total cost basis (sum of all positions)
-                        total_cost_basis = (df['shares'] * df['entry_price']).sum()
-                        if total_cost_basis > 0:
-                            # Calculate intraday return %
-                            intraday_return_pct = ((total_realized_pnl + total_unrealized_pnl) / total_cost_basis) * 100
-                            st.metric("Intraday Return %", f"{intraday_return_pct:.2f}%")
-                        else:
-                            st.metric("Intraday Return %", "0.00%")
-                    
-                    with col2:
-                        # Avg Trade Size = total_used_capital / number of active positions
-                        if active_positions > 0:
-                            avg_trade_size = total_used_capital / active_positions
-                            st.metric("Avg Trade Size", f"${avg_trade_size:,.2f}")
-                            st.caption(number_to_words_display(avg_trade_size, "dollars"))
-                        else:
-                            st.metric("Avg Trade Size", "$0.00")
-                    
-                    with col3:
-                        # Trades Executed = count of trades where shares > 0
-                        if 'shares' in df.columns:
-                            trades_executed = len(df[df['shares'] > 0])
-                            st.metric("Trades Executed", trades_executed)
-                            st.caption(number_to_words_display(trades_executed))
-                        else:
-                            st.metric("Trades Executed", 0)
-                    
-                    with col4:
-                        # Average Trade Duration (for closed positions)
-                        if 'entry_time' in df.columns and 'close_time' in df.columns:
-                            # Filter for closed positions with valid times (including SPXU and SQQQ)
-                            closed_with_times = df[(df['position_shares'] == 0) & 
-                                                   (df['entry_time'].notna()) & 
-                                                   (df['close_time'].notna())].copy()
-                            if len(closed_with_times) > 0:
-                                # Convert to datetime and calculate durations
-                                closed_with_times['entry_dt'] = pd.to_datetime(closed_with_times['entry_time'])
-                                closed_with_times['close_dt'] = pd.to_datetime(closed_with_times['close_time'])
-                                closed_with_times['duration'] = closed_with_times['close_dt'] - closed_with_times['entry_dt']
-                                
-                                # Calculate average duration
-                                avg_duration = closed_with_times['duration'].mean()
-                                
-                                # Format duration
-                                total_seconds = int(avg_duration.total_seconds())
-                                hours = total_seconds // 3600
-                                minutes = (total_seconds % 3600) // 60
-                                seconds = total_seconds % 60
-                                
-                                if hours > 0:
-                                    duration_str = f"{hours}h {minutes}m"
-                                elif minutes > 0:
-                                    duration_str = f"{minutes}m {seconds}s"
-                                else:
-                                    duration_str = f"{seconds}s"
-                                
-                                st.metric("Avg Trade Duration", duration_str)
+                    else:
+                        st.metric("Win Rate %", "N/A")
+                
+                # ===== CAPITAL & EXPOSURE METRICS =====
+                st.markdown("### Capital & Exposure Metrics")
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Current Exposure", f"${total_used_capital:,.2f}")
+                    st.caption(number_to_words_display(total_used_capital, "dollars"))
+                
+                with col2:
+                    # Total Portfolio Value = used_capital + unrealized_pnl
+                    total_portfolio_value = total_used_capital + total_unrealized_pnl
+                    st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
+                    st.caption(number_to_words_display(total_portfolio_value, "dollars"))
+                
+                with col3:
+                    # Available Cash = EQUITY - used_capital
+                    available_cash = equity - total_used_capital
+                    st.metric("Cash Available", f"${available_cash:,.2f}")
+                    st.caption(number_to_words_display(available_cash, "dollars"))
+                
+                with col4:
+                    st.metric("Active Positions", active_positions)
+                    st.caption(number_to_words_display(active_positions))
+                
+                # ===== EFFICIENCY & EXECUTION METRICS =====
+                st.markdown("### Efficiency & Execution Metrics")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                with col1:
+                    # Calculate total cost basis (sum of all positions)
+                    total_cost_basis = (df['shares'] * df['entry_price']).sum()
+                    if total_cost_basis > 0:
+                        # Calculate intraday return %
+                        intraday_return_pct = ((total_realized_pnl + total_unrealized_pnl) / total_cost_basis) * 100
+                        st.metric("Intraday Return %", f"{intraday_return_pct:.2f}%")
+                    else:
+                        st.metric("Intraday Return %", "0.00%")
+                
+                with col2:
+                    # Avg Trade Size = total_used_capital / number of active positions
+                    if active_positions > 0:
+                        avg_trade_size = total_used_capital / active_positions
+                        st.metric("Avg Trade Size", f"${avg_trade_size:,.2f}")
+                        st.caption(number_to_words_display(avg_trade_size, "dollars"))
+                    else:
+                        st.metric("Avg Trade Size", "$0.00")
+                
+                with col3:
+                    # Trades Executed = count of trades where shares > 0
+                    if 'shares' in df.columns:
+                        trades_executed = len(df[df['shares'] > 0])
+                        st.metric("Trades Executed", trades_executed)
+                        st.caption(number_to_words_display(trades_executed))
+                    else:
+                        st.metric("Trades Executed", 0)
+                
+                with col4:
+                    # Average Trade Duration (for closed positions)
+                    if 'entry_time' in df.columns and 'close_time' in df.columns:
+                        # Filter for closed positions with valid times (including SPXU and SQQQ)
+                        closed_with_times = df[(df['position_shares'] == 0) & 
+                                               (df['entry_time'].notna()) & 
+                                               (df['close_time'].notna())].copy()
+                        if len(closed_with_times) > 0:
+                            # Convert to datetime and calculate durations
+                            closed_with_times['entry_dt'] = pd.to_datetime(closed_with_times['entry_time'])
+                            closed_with_times['close_dt'] = pd.to_datetime(closed_with_times['close_time'])
+                            closed_with_times['duration'] = closed_with_times['close_dt'] - closed_with_times['entry_dt']
+                            
+                            # Calculate average duration
+                            avg_duration = closed_with_times['duration'].mean()
+                            
+                            # Format duration
+                            total_seconds = int(avg_duration.total_seconds())
+                            hours = total_seconds // 3600
+                            minutes = (total_seconds % 3600) // 60
+                            seconds = total_seconds % 60
+                            
+                            if hours > 0:
+                                duration_str = f"{hours}h {minutes}m"
+                            elif minutes > 0:
+                                duration_str = f"{minutes}m {seconds}s"
                             else:
-                                st.metric("Avg Trade Duration", "N/A")
+                                duration_str = f"{seconds}s"
+                            
+                            st.metric("Avg Trade Duration", duration_str)
                         else:
                             st.metric("Avg Trade Duration", "N/A")
-                    
-                    with col5:  
-                        try:
-                            st.metric("Start Date", df['created_at'].apply(lambda x: x.strftime('%m-%d-%Y')).min())
-                        except Exception as e:
-                            st.metric("Start Date", "N/A")
-                    st.markdown("---")
-                
-                # Add filter options in a single row
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    show_live_only = st.checkbox("Live position", value=False, key="show_live_positions_simplified")
-                with col2:
-                    qualified_stocks_only = st.checkbox("Qualified Stocks", value=False, key="qualified_stocks_only_simplified")
-                with col3:
-                    executed_trades_only = st.checkbox("Executed Trades", value=False, key="executed_trades_only_simplified")
-                
-                # Filter positions based on checkbox combinations
-                simplified_df = df.copy()
-                
-                # Apply filters
-                if show_live_only:
-                    if 'position_active' in simplified_df.columns:
-                        simplified_df = simplified_df[simplified_df['position_active'] == True]
-                
-                if qualified_stocks_only:
-                    if 'shares' in simplified_df.columns:
-                        simplified_df = simplified_df[simplified_df['shares'] == 0]
-                
-                if executed_trades_only:
-                    if 'shares' in simplified_df.columns:
-                        simplified_df = simplified_df[simplified_df['shares'] > 0]
-                
-                simplified_df = simplified_df.copy()
-                
-                if not simplified_df.empty:
-                    # Create simplified DataFrame with calculated columns
-                    simplified_display = pd.DataFrame({
-                        'Symbol': simplified_df['symbol'],
-                        'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
-                        'Actual Quantity': simplified_df['position_shares'] if 'position_shares' in simplified_df.columns else simplified_df['shares'],
-                        'Initial Quantity': simplified_df['shares'],
-                        'Entry Price': simplified_df['entry_price'],
-                        'Current Price': simplified_df['current_price'],
-                        'Unrealized PnL': simplified_df['unrealized_pnl'],
-                        'Realized PnL': simplified_df['realized_pnl'],
-                        'Score': simplified_df['score'] if 'score' in simplified_df.columns else 0,
-                        'Entry Time': simplified_df['entry_time'] if 'entry_time' in simplified_df.columns else 'N/A',
-                        'Close Time': simplified_df['close_time'] if 'close_time' in simplified_df.columns else 'N/A'
-                    })
-                    
-                    # Ensure numeric types for calculations
-                    simplified_display['Actual Quantity'] = pd.to_numeric(simplified_display['Actual Quantity'], errors='coerce')
-                    simplified_display['Initial Quantity'] = pd.to_numeric(simplified_display['Initial Quantity'], errors='coerce')
-                    simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
-                    simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
-                    simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
-                    simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
-                    
-                    # Calculate additional columns using Actual Quantity
-                    simplified_display['Cost Basis'] = simplified_display['Initial Quantity'] * simplified_display['Entry Price']
-                    simplified_display['Market Value'] = simplified_display['Actual Quantity'] * simplified_display['Current Price']
-                    
-                    # Calculate PnL from raw database fields (same as raw database view)
-                    calculated_unrealized_pnl = simplified_display['Actual Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
-                    calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
-                    
-                    # Use calculated unrealized PnL + stored realized PnL
-                    total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
-                    simplified_display['PnL ($)'] = total_pnl
-                    
-                    # Calculate percentage based on total PnL relative to cost basis
-                    simplified_display['PnL (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
-                    simplified_display['PnL (%)'] = simplified_display['PnL (%)'].fillna(0)
-                    
-                    # Rename columns for display
-                    simplified_display = simplified_display.rename(columns={
-                        'Actual Quantity': 'Actual Qty',
-                        'Initial Quantity': 'Initial Qty'
-                    })
-                    
-                    # Select and reorder columns for display
-                    display_columns = [
-                        'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
-                        'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
-                    ]
-                    simplified_display = simplified_display[display_columns]
-                    
-                    # Format the data with commas and dollar signs
-                    def format_currency(value):
-                        if pd.isna(value):
-                            return "$0.00"
-                        return f"${value:,.2f}"
-                    
-                    def format_percentage(value):
-                        if pd.isna(value):
-                            return "0.00%"
-                        return f"{value:.2f}%"
-                    
-                    # Apply formatting to the display dataframe
-                    formatted_display = simplified_display.copy()
-                    formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
-                    formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
-                    formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
-                    formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
-                    formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
-                    formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
-                    
-                    # Format time columns to show only HH:MM:SS
-                    def format_time(time_value):
-                        if pd.isna(time_value) or time_value == 'N/A' or str(time_value) in ['None', 'nan', '']:
-                            return 'N/A'
-                        try:
-                            # Try to parse as datetime and extract time
-                            time_obj = pd.to_datetime(time_value)
-                            return time_obj.strftime('%I:%M:%S %p')
-                        except:
-                            return 'N/A'
-                    
-                    formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
-                    formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
-                    
-                    # Display the formatted table
-                    st.dataframe(formatted_display, use_container_width=True)
-                else:
-                    st.info("No trades found in the database.")
-                
-                # Download button for simplified data
-                csv = simplified_df.to_csv(index=False)
-                st.download_button(
-                    label="Download Simplified Data as CSV",
-                    data=csv,
-                    file_name=f"simplified_trades_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-                
-                if df.empty:
-                    st.info("No data found in trades.db")
-            
-            conn.close()
-            
-            # Auto-refresh moved to global scope
-        
-        with tab2:
-            st.subheader("Raw Database View")
-            
-            # Initialize session state for database save tracking
-            if 'db_saved_raw' not in st.session_state:
-                st.session_state.db_saved_raw = False
-            
-            # Check if database has tables
-            def has_database_tables_raw():
-                try:
-                    if not os.path.exists('trades.db'):
-                        return False
-                    conn = sqlite3.connect('trades.db')
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                    tables = cursor.fetchall()
-                    conn.close()
-                    return len(tables) > 0
-                except:
-                    return False
-            
-            db_has_tables_raw = has_database_tables_raw()
-            
-            # # Show appropriate warnings
-            # if db_has_tables_raw:
-            #     st.warning("⚠️ Clear Database before starting! Old data exists.")
-            
-            # Database management buttons
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                if st.button("Refresh Data", type="secondary", help="Refreshes the dashboard view. Use when numbers aren't updating.", key="refresh_raw"):
-                    st.rerun()
-            
-            with col2:
-                if st.button("Start", type="primary", help="Starts the bot. First runs initialization (about 30 minutes).", key="start_raw"):
-                    try:
-                        # Auto-backup if database has data (backup_database also deletes the original)
-                        if db_has_tables_raw:
-                            st.info("📦 Backing up existing database...")
-                            backup_result = trades_db.backup_database()
-                            if backup_result:
-                                st.success("✅ Database backed up and cleared! Starting system...")
-                            else:
-                                st.error("❌ Failed to backup database. Not starting.")
-                                st.stop()
-                        
-                        # Get the current directory
-                        current_dir = os.getcwd()
-                        main_py_path = os.path.join(current_dir, "main.py")
-                        
-                        if os.path.exists(main_py_path):
-                            # Open main.py in a new terminal window/process
-                            if os.name == 'nt':  # Windows
-                                # Use a simpler approach for Windows to avoid path issues
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path], 
-                                            shell=True, cwd=current_dir)
-                            else:  # Linux/Mac
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path], 
-                                            cwd=current_dir)
-                            
-                        else:
-                            st.error("main.py not found!")
-                            
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-            
-            with col3:
-                if st.button("Lite Restart", type="primary", help="Starts the bot without initialization. Use only when restarting the bot.", key="lite_restart_simplified"):
-                    try:
-                        current_dir = os.getcwd()
-                        main_py_path = os.path.join(current_dir, "main.py")
-                        if os.path.exists(main_py_path):
-                            if os.name == 'nt':
-                                subprocess.Popen(['start', 'cmd', '/k', 'python', main_py_path, '--lite'], shell=True, cwd=current_dir)
-                            else:
-                                subprocess.Popen(['gnome-terminal', '--', 'python3', main_py_path, '--lite'], cwd=current_dir)
-                            st.success("✅ main.py started (lite).")
-                        else:
-                            st.error("❌ main.py not found!")
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-            
-            with col4:
-                if st.button("Reset Positions", type="secondary", help="Closes all open positions on IBKR and updates the database. Runs independently of the bot. Use before restarting the bot if any positions are open on IBKR.", key="reset_positions_simplified"):
-                    try:
-                        
-                        
-                        with st.spinner("Closing all open positions on IBKR..."):
-                            count, positions = close_all_open_positions()
-                        
-                        if count > 0:
-                            total_pnl = sum(p['pnl'] for p in positions)
-                            st.success(f"Successfully closed {count} positions! Total PnL: ${total_pnl:.2f}")
-                            st.caption(f"({number_to_words_display(count)} positions; {number_to_words_display(total_pnl, 'dollars')})")
-                            
-                            # Show details of closed positions
-                            if positions:
-                                st.write("**Closed Positions:**")
-                                for pos in positions:
-                                    st.write(f"- {pos['symbol']}: {pos['shares']} shares, PnL: ${pos['pnl']:.2f}")
-                            
-                            st.rerun()
-                        else:
-                            st.info("No open positions found to close")
-                            
-                    except Exception as e:
-                        st.error(f"Error closing positions: {str(e)}")
-            
-            # Connect to database for raw view
-            conn = get_db_connection()
-            if not conn:
-                st.error("Could not connect to database. Make sure `trades.db` exists in the current directory.")
-                return
-            
-            # Check if stock_strategies table exists
-            table_info = get_table_info(conn)
-            if 'stock_strategies' not in table_info:
-                st.error("The 'stock_strategies' table does not exist in the database.")
-                st.info("This usually means the database hasn't been properly initialized. Try running the main trading application first.")
-                conn.close()
-                return
-            
-            # Get data from stock_strategies table (raw database view)
-            data, column_names = get_all_data(conn, 'stock_strategies')
-            
-            if data:
-                # Convert to DataFrame and display
-                df = pd.DataFrame(data, columns=column_names)
-                
-                # Fix data type issues for Streamlit compatibility
-                # Convert datetime columns to proper datetime objects (fixes PyArrow serialization error)
-                datetime_columns = ['entry_time', 'exit_time', 'created_at', 'updated_at', 'last_check_time']
-                for col in datetime_columns:
-                    if col in df.columns:
-                        try:
-                            df[col] = pd.to_datetime(df[col], errors='coerce')
-                        except Exception:
-                            # If conversion fails, keep as string but clean it
-                            df[col] = df[col].astype(str)
-                
-                # Convert boolean columns from bytes/ints to proper booleans
-                boolean_columns = ['additional_checks_passed', 'position_active', 'trailing_exit_monitoring', 'hedge_active']
-                for col in boolean_columns:
-                    if col in df.columns:
-                        # Convert bytes/ints to boolean
-                        df[col] = df[col].apply(lambda x: bool(x) if x is not None else False)
-                
-                # Convert numeric columns to proper types
-                numeric_columns = ['score', 'position_shares', 'current_price', 'entry_price', 'stop_loss_price', 
-                                'take_profit_price', 'used_capital', 'unrealized_pnl', 'realized_pnl', 'hedge_shares', 
-                                'hedge_level', 'hedge_beta', 'hedge_entry_price', 'hedge_exit_price', 'hedge_pnl']
-                for col in numeric_columns:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                
-                # Calculate PnL metrics (raw database view)
-                if 'unrealized_pnl' in df.columns:
-                    total_unrealized_pnl = df['unrealized_pnl'].sum()
-                    total_realized_pnl = df['realized_pnl'].sum() if 'realized_pnl' in df.columns else 0
-                    total_combined_pnl = total_unrealized_pnl + total_realized_pnl
-                    active_positions = len(df[df['position_active'] == True]) if 'position_active' in df.columns else 0
-                    
-                    # Display PnL metrics in a single row with 4 columns
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        st.metric("Total Unrealized PnL", f"${total_unrealized_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_unrealized_pnl, "dollars"))
-                    
-                    with col2:
-                        st.metric("Total Realized PnL", f"${total_realized_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_realized_pnl, "dollars"))
-                    
-                    with col3:
-                        st.metric("Total Combined PnL", f"${total_combined_pnl:,.2f}")
-                        st.caption(number_to_words_display(total_combined_pnl, "dollars"))
-                    
-                    with col4:
-                        st.metric("Active Positions", active_positions)
-                        st.caption(number_to_words_display(active_positions))
-                    
-                    # Additional metrics in a second row
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    # Filter for active positions
-                    active_df = df[df['position_active'] == True] if 'position_active' in df.columns else df
-                    
-                    with col1:
-                        if 'used_capital' in active_df.columns:
-                            total_used_capital = active_df['used_capital'].sum()
-                            st.metric("Total Capital Deployed", f"${total_used_capital:,.2f}")
-                            st.caption(number_to_words_display(total_used_capital, "dollars"))
-                        else:
-                            total_used_capital = 0
-                    
-                    with col2:
-                        # Calculate total cost basis (sum of all positions)
-                        total_cost_basis = (df['shares'] * df['entry_price']).sum()
-                        if total_cost_basis > 0:
-                            # Calculate intraday return %
-                            intraday_return_pct = ((total_realized_pnl + total_unrealized_pnl) / total_cost_basis) * 100
-                            st.metric("Intraday Return %", f"{intraday_return_pct:.2f}%")
-                        else:
-                            st.metric("Intraday Return %", "0.00%")
-                    
-                    with col3:
-                        # Total Portfolio Value = used_capital + unrealized_pnl
-                        total_portfolio_value = total_used_capital + total_unrealized_pnl
-                        st.metric("Total Portfolio Value", f"${total_portfolio_value:,.2f}")
-                        st.caption(number_to_words_display(total_portfolio_value, "dollars"))
-                    
-                    with col4:
-                        # Available Cash = EQUITY - used_capital
-                        equity = config.get('EQUITY', 0)
-                        available_cash = equity - total_used_capital
-                        st.metric("Cash Available", f"${available_cash:,.2f}")
-                        st.caption(number_to_words_display(available_cash, "dollars"))
-                    
-                    # Trading statistics in a third row
-                    col1, col2, col3, col4, col5 = st.columns(5)
-                    
-                    with col1:
-                        # Exposure Ratio = (total_used_capital / equity) * 100
-                        if equity > 0:
-                            exposure_ratio = (total_used_capital / equity) * 100
-                            st.metric("Exposure Ratio", f"{exposure_ratio:.2f}%")
-                        else:
-                            st.metric("Exposure Ratio", "0.00%")
-                    
-                    with col2:
-                        # Avg Position Size = total_used_capital / number of active positions
-                        if active_positions > 0:
-                            avg_position_size = total_used_capital / active_positions
-                            st.metric("Avg Position Size", f"${avg_position_size:,.2f}")
-                            st.caption(number_to_words_display(avg_position_size, "dollars"))
-                        else:
-                            st.metric("Avg Position Size", "$0.00")
-                    
-                    with col3:
-                        # Win Rate % = (profitable closed positions / total closed positions) * 100
-                        # Closed positions are those where position_shares = 0
-                        closed_positions = df[df['position_shares'] == 0] if 'position_shares' in df.columns else pd.DataFrame()
-                        if len(closed_positions) > 0:
-                            profitable_closed = len(closed_positions[closed_positions['realized_pnl'] > 0])
-                            losing_closed = len(closed_positions[closed_positions['realized_pnl'] < 0])
-                            total_closed = profitable_closed + losing_closed
-                            if total_closed > 0:
-                                win_rate = (profitable_closed / total_closed) * 100
-                                st.metric("Win Rate %", f"{win_rate:.2f}%")
-                            else:
-                                st.metric("Win Rate %", "N/A")
-                        else:
-                            st.metric("Win Rate %", "N/A")
-                    
-                    with col4:
-                        # Profit Factor = gross profit / gross loss
-                        gross_profit = df[df['realized_pnl'] > 0]['realized_pnl'].sum()
-                        gross_loss = abs(df[df['realized_pnl'] < 0]['realized_pnl'].sum())
-                        if gross_loss > 0:
-                            profit_factor = gross_profit / gross_loss
-                            st.metric("Profit Factor", f"{profit_factor:.2f}")
-                        else:
-                            st.metric("Profit Factor", "N/A" if gross_profit == 0 else "∞")
-                    
-                    with col5:
-                        # Average PnL per Trade (only count trades with shares > 0)
-                        if 'shares' in df.columns:
-                            executed_trades = df[df['shares'] > 0]
-                            total_trades = len(executed_trades)
-                        else:
-                            total_trades = len(df)
-                        if total_trades > 0:
-                            avg_pnl_per_trade = (total_realized_pnl + total_unrealized_pnl) / total_trades
-                            st.metric("Avg PnL/Trade", f"${avg_pnl_per_trade:,.2f}")
-                            st.caption(number_to_words_display(avg_pnl_per_trade, "dollars"))
-                        else:
-                            st.metric("Avg PnL/Trade", "$0.00")
-                    
-                    st.markdown("---")
-                
-                # Display the main data table with error handling for PyArrow serialization
-                try:
-                    st.dataframe(df, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error displaying DataFrame: {str(e)}")
-                    st.info("Trying alternative display method...")
-                    
-                    # Fallback: display as text with pagination
-                    st.subheader("Data Table (Alternative View)")
-                    
-                    # Show data in chunks to avoid overwhelming the display
-                    chunk_size = 20
-                    total_rows = len(df)
-                    
-                    if total_rows > chunk_size:
-                        page = st.selectbox(f"Select page (showing {chunk_size} rows per page):", 
-                                        range(1, (total_rows // chunk_size) + 2))
-                        start_idx = (page - 1) * chunk_size
-                        end_idx = min(start_idx + chunk_size, total_rows)
-                        st.write(f"Showing rows {start_idx + 1} to {end_idx} of {total_rows}")
-                        st.caption(f"({number_to_words_display(total_rows)} total rows)")
-                        st.write(df.iloc[start_idx:end_idx])
                     else:
-                        st.write(df)
-                    
-                    st.warning("💡 The DataFrame display had issues. Consider checking your data types or restarting the dashboard.")
+                        st.metric("Avg Trade Duration", "N/A")
                 
-                # Download button
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="Download data as CSV",
-                    data=csv,
-                    file_name=f"trades_db_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-                
-                if df.empty:
-                    st.info("No data found in trades.db")
+                with col5:  
+                    try:
+                        st.metric("Start Date", df['created_at'].apply(lambda x: x.strftime('%m-%d-%Y')).min())
+                    except Exception as e:
+                        st.metric("Start Date", "N/A")
+                st.markdown("---")
             
-            conn.close()
+            # Add filter options in a single row
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                show_live_only = st.checkbox("Live position", value=False, key="show_live_positions_simplified")
+            with col2:
+                qualified_stocks_only = st.checkbox("Qualified Stocks", value=False, key="qualified_stocks_only_simplified")
+            with col3:
+                executed_trades_only = st.checkbox("Executed Trades", value=False, key="executed_trades_only_simplified")
+            with col4:
+                hide_indicator_criteria = st.checkbox("Hide indicator/criteria", value=False, key="hide_indicator_criteria_simplified")
+            
+            # Filter positions based on checkbox combinations
+            simplified_df = df.copy()
+            
+            # Apply filters
+            if show_live_only:
+                if 'position_active' in simplified_df.columns:
+                    simplified_df = simplified_df[simplified_df['position_active'] == True]
+            
+            if qualified_stocks_only:
+                if 'shares' in simplified_df.columns:
+                    simplified_df = simplified_df[simplified_df['shares'] == 0]
+            
+            if executed_trades_only:
+                if 'shares' in simplified_df.columns:
+                    simplified_df = simplified_df[simplified_df['shares'] > 0]
+            
+            simplified_df = simplified_df.copy()
+            
+            if not simplified_df.empty:
+                # Create simplified DataFrame with calculated columns
+                simplified_display = pd.DataFrame({
+                    'Symbol': simplified_df['symbol'],
+                    'Active': simplified_df['position_active'] if 'position_active' in simplified_df.columns else True,
+                    'Actual Quantity': simplified_df['position_shares'] if 'position_shares' in simplified_df.columns else simplified_df['shares'],
+                    'Initial Quantity': simplified_df['shares'],
+                    'Entry Price': simplified_df['entry_price'],
+                    'Current Price': simplified_df['current_price'],
+                    'Unrealized PnL': simplified_df['unrealized_pnl'],
+                    'Realized PnL': simplified_df['realized_pnl'],
+                    'Score': simplified_df['score'] if 'score' in simplified_df.columns else 0,
+                    'Entry Time': simplified_df['entry_time'] if 'entry_time' in simplified_df.columns else 'N/A',
+                    'Close Time': simplified_df['close_time'] if 'close_time' in simplified_df.columns else 'N/A',
+                    'Sector': simplified_df['sector'] if 'sector' in simplified_df.columns else 'N/A',
+                })
+                
+                # Ensure numeric types for calculations
+                simplified_display['Actual Quantity'] = pd.to_numeric(simplified_display['Actual Quantity'], errors='coerce')
+                simplified_display['Initial Quantity'] = pd.to_numeric(simplified_display['Initial Quantity'], errors='coerce')
+                simplified_display['Entry Price'] = pd.to_numeric(simplified_display['Entry Price'], errors='coerce')
+                simplified_display['Current Price'] = pd.to_numeric(simplified_display['Current Price'], errors='coerce')
+                simplified_display['Unrealized PnL'] = pd.to_numeric(simplified_display['Unrealized PnL'], errors='coerce')
+                simplified_display['Realized PnL'] = pd.to_numeric(simplified_display['Realized PnL'], errors='coerce')
+                
+                # Calculate additional columns using Actual Quantity
+                simplified_display['Cost Basis'] = simplified_display['Initial Quantity'] * simplified_display['Entry Price']
+                simplified_display['Market Value'] = simplified_display['Actual Quantity'] * simplified_display['Current Price']
+                
+                # Calculate PnL from raw database fields (same as raw database view)
+                calculated_unrealized_pnl = simplified_display['Actual Quantity'] * (simplified_display['Current Price'] - simplified_display['Entry Price'])
+                calculated_unrealized_pnl = calculated_unrealized_pnl.fillna(0)
+                
+                # Use calculated unrealized PnL + stored realized PnL
+                total_pnl = calculated_unrealized_pnl + simplified_display['Realized PnL']
+                simplified_display['PnL ($)'] = total_pnl
+                
+                # Calculate percentage based on total PnL relative to cost basis
+                simplified_display['PnL (%)'] = (total_pnl / simplified_display['Cost Basis'] * 100).round(2)
+                simplified_display['PnL (%)'] = simplified_display['PnL (%)'].fillna(0)
+                
+                # Rename columns for display
+                simplified_display = simplified_display.rename(columns={
+                    'Actual Quantity': 'Actual Qty',
+                    'Initial Quantity': 'Initial Qty'
+                })
+                
+                # Expand indicator_values and criteria_passed into one column each (grouped: indicator then related criteria)
+                indicator_criteria_columns = []
+                if not hide_indicator_criteria and 'indicator_values' in simplified_df.columns and 'criteria_passed' in simplified_df.columns:
+                    expanded = _expand_indicator_criteria_columns(simplified_df['indicator_values'], simplified_df['criteria_passed'])
+                    for c in INDICATOR_CRITERIA_COLUMN_ORDER:
+                        display_name = INDICATOR_CRITERIA_DISPLAY_NAMES.get(c, c)
+                        simplified_display[display_name] = expanded[c].values
+                    indicator_criteria_columns = [INDICATOR_CRITERIA_DISPLAY_NAMES.get(c, c) for c in INDICATOR_CRITERIA_COLUMN_ORDER]
+                
+                # Select and reorder columns for display (Sector at end, then expanded indicator/criteria columns if not hidden)
+                display_columns = [
+                    'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
+                    'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time',
+                    'Sector',
+                ] + indicator_criteria_columns
+                simplified_display = simplified_display[display_columns]
+                
+                # Format the data with commas and dollar signs
+                def format_currency(value):
+                    if pd.isna(value):
+                        return "$0.00"
+                    return f"${value:,.2f}"
+                
+                def format_percentage(value):
+                    if pd.isna(value):
+                        return "0.00%"
+                    return f"{value:.2f}%"
+                
+                # Apply formatting to the display dataframe
+                formatted_display = simplified_display.copy()
+                formatted_display['Entry Price'] = formatted_display['Entry Price'].apply(format_currency)
+                formatted_display['Current Price'] = formatted_display['Current Price'].apply(format_currency)
+                formatted_display['Cost Basis'] = formatted_display['Cost Basis'].apply(format_currency)
+                formatted_display['Market Value'] = formatted_display['Market Value'].apply(format_currency)
+                formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
+                formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
+                
+                # Format time columns to show only HH:MM:SS
+                def format_time(time_value):
+                    if pd.isna(time_value) or time_value == 'N/A' or str(time_value) in ['None', 'nan', '']:
+                        return 'N/A'
+                    try:
+                        # Try to parse as datetime and extract time
+                        time_obj = pd.to_datetime(time_value)
+                        return time_obj.strftime('%I:%M:%S %p')
+                    except:
+                        return 'N/A'
+                
+                formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
+                formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
+                
+                # Make Arrow-compatible: object columns (mixed float/str/bool) -> string
+                for col in formatted_display.columns:
+                    if formatted_display[col].dtype == object:
+                        formatted_display[col] = formatted_display[col].astype(str)
+                
+                # Display the formatted table
+                st.dataframe(formatted_display, width="stretch")
+            else:
+                st.info("No trades found in the database.")
+            
+            # Download button for simplified data
+            csv = simplified_df.to_csv(index=False)
+            st.download_button(
+                label="Download Simplified Data as CSV",
+                data=csv,
+                file_name=f"simplified_trades_{datetime.now(pytz.timezone('US/Eastern')).strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+            
+            if df.empty:
+                st.info("No data found in trades.db")
         
-        # Auto-refresh every 7 seconds
-            st_autorefresh(interval=7000, key="raw_database_refresh")
+        conn.close()
+        
+        # Auto-refresh moved to global scope
+    
+       
+        st_autorefresh(interval=7000, key="raw_database_refresh")
         
     
     elif page == "Historical Data":
@@ -1136,7 +916,7 @@ def main():
             st.info("Historical data is automatically backed up when you start main.py")
         else:
             # Create tabs for different views
-            tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Database Viewer", "Symbol Performance", "Historical Files"])
+            tab1, tab2, tab3, tab4 = st.tabs(["Summary", "Historical Data", "Symbol Performance", "Historical Files"])
             
             with tab1:
                 st.subheader("Summary Statistics")
@@ -1365,7 +1145,7 @@ def main():
                     formatted_all_trades['PnL (%)'] = formatted_all_trades['PnL (%)'].apply(format_percentage)
                     
                     # Display the formatted table
-                    st.dataframe(formatted_all_trades, use_container_width=True)
+                    st.dataframe(formatted_all_trades, width="stretch")
                     
                     # Download button for all trades
                     csv = all_trades_display.to_csv(index=False)
@@ -1546,7 +1326,7 @@ def main():
                             simplified_display = pd.DataFrame({
                                 'Date': symbol_data['data_date'],
                                 'Symbol': symbol_data['symbol'],
-                                'Quantity': symbol_data['position_shares'],
+                                'Quantity': symbol_data['shares'],
                                 'Entry Price': symbol_data['entry_price'],
                                 'Exit Price': symbol_data['current_price'],
                                 'Unrealized PnL': symbol_data['unrealized_pnl'],
@@ -1591,8 +1371,11 @@ def main():
                             formatted_display['PnL ($)'] = formatted_display['PnL ($)'].apply(format_currency)
                             formatted_display['PnL (%)'] = formatted_display['PnL (%)'].apply(format_percentage)
                             
+                            for col in formatted_display.columns:
+                                if formatted_display[col].dtype == object:
+                                    formatted_display[col] = formatted_display[col].astype(str)
                             # Display the formatted table
-                            st.dataframe(formatted_display, use_container_width=True)
+                            st.dataframe(formatted_display, width="stretch")
                         else:
                             # Raw data view
                             display_data = symbol_data[['data_date', 'position_active', 'position_shares', 'shares',
@@ -1605,7 +1388,7 @@ def main():
                             if 'close_time' in symbol_data.columns:
                                 display_data['close_time'] = symbol_data['close_time'].astype(str)
                             
-                            st.dataframe(display_data, use_container_width=True)
+                            st.dataframe(display_data, width="stretch")
                 else:
                     st.warning("No historical data available for symbol analysis")
             
@@ -1664,7 +1447,7 @@ def main():
                     })
                 
                 df_files = pd.DataFrame(file_data)
-                st.dataframe(df_files, use_container_width=True)
+                st.dataframe(df_files, width="stretch")
                 
                 # File actions
                 col1, col2 = st.columns(2)
@@ -1697,7 +1480,7 @@ def main():
                             st.warning("No data found in historical files")
             
             with tab2:
-                st.subheader("Database Viewer")
+                st.subheader("Historical Data")
                 st.markdown("View raw and simplified data from any historical database file")
                 
                 # Database file selector
@@ -1915,7 +1698,8 @@ def main():
                                         'Realized PnL': simplified_df['realized_pnl'],
                                         'Score': simplified_df['score'] if 'score' in simplified_df.columns else 0,
                                         'Entry Time': simplified_df['entry_time'] if 'entry_time' in simplified_df.columns else 'N/A',
-                                        'Close Time': simplified_df['close_time'] if 'close_time' in simplified_df.columns else 'N/A'
+                                        'Close Time': simplified_df['close_time'] if 'close_time' in simplified_df.columns else 'N/A',
+                                        'Sector': simplified_df['sector'] if 'sector' in simplified_df.columns else 'N/A',
                                     })
                                     
                                     # Ensure numeric types for calculations
@@ -1948,10 +1732,10 @@ def main():
                                         'Initial Quantity': 'Initial Qty'
                                     })
                                     
-                                    # Select and reorder columns for display
+                                    # Select and reorder columns for display (Sector at end; no indicator_values/criteria_passed in historical)
                                     display_columns = [
                                         'Symbol', 'Active', 'Score', 'Actual Qty', 'Initial Qty', 'Entry Price', 'Current Price', 
-                                        'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time'
+                                        'Cost Basis', 'Market Value', 'PnL ($)', 'PnL (%)', 'Entry Time', 'Close Time', 'Sector'
                                     ]
                                     simplified_display = simplified_display[display_columns]
                                     
@@ -1989,8 +1773,11 @@ def main():
                                     formatted_display['Entry Time'] = formatted_display['Entry Time'].apply(format_time)
                                     formatted_display['Close Time'] = formatted_display['Close Time'].apply(format_time)
                                     
+                                    for col in formatted_display.columns:
+                                        if formatted_display[col].dtype == object:
+                                            formatted_display[col] = formatted_display[col].astype(str)
                                     # Display the formatted table
-                                    st.dataframe(formatted_display, use_container_width=True)
+                                    st.dataframe(formatted_display, width="stretch")
                                     
                                     # Download button for calculated data (before formatting, so numbers are preserved)
                                     csv_data = simplified_display.to_csv(index=False)
@@ -2168,7 +1955,7 @@ def main():
                                 
                                 if not df_display.empty:
                                     # Show raw database table (all columns)
-                                    st.dataframe(df_display, use_container_width=True)
+                                    st.dataframe(df_display, width="stretch")
                                     csv_data = df_display.to_csv(index=False)
                                     st.download_button(
                                         label="Download Raw Data as CSV",
@@ -2331,11 +2118,11 @@ def main():
             alpha_config = config.get('ALPHA_SCORE_CONFIG', {})
             
             # Trend Analysis
-            st.write("**1. Trend Analysis (30% weight)**")
+            st.write("**1. Trend Analysis**")
             
             col1, col2 = st.columns(2)
             with col1:
-                trend_weight = st.number_input("Trend Weight (%):", 0, 100, alpha_config.get('trend', {}).get('weight', 30), 1, key="trend_weight")            
+                trend_weight = st.number_input("Trend Weight (%):", 0, 100, alpha_config.get('trend', {}).get('weight', 35), 1, key="trend_weight")            
             # VWAP Configuration
             st.write("VWAP Settings")
             col1, col2 = st.columns(2)
@@ -2343,8 +2130,7 @@ def main():
                 default_vwap = normalize_timeframe_list(indicators_config.get('vwap', {}).get('timeframes', ["3 mins"]))
                 vwap_timeframes = st.multiselect("VWAP Timeframes:", VALID_BAR_SIZES,
                     default=default_vwap if default_vwap else ["3 mins"], key="vwap_timeframes")
-            with col2:
-                vwap_below_price = st.checkbox("VWAP Should Be Below Price", value=config.get('VWAP_SHOULD_BE_BELOW_PRICE', True), key="vwap_below_price_global")
+            # VWAP_SHOULD_BE_BELOW_PRICE always True (not shown in UI, written to config on save)
             
             # EMA Configuration
             st.write("EMA Settings")
@@ -2364,11 +2150,11 @@ def main():
             
             # Momentum Analysis
             st.markdown("---")
-            st.write("**2. Momentum Analysis (20% weight)**")
+            st.write("**2. Momentum Analysis**")
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                momentum_weight = st.number_input("Momentum Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('weight', 20), 1, key="momentum_weight")
+                momentum_weight = st.number_input("Momentum Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('weight', 25), 1, key="momentum_weight")
                 macd_positive_weight = st.number_input("MACD > 0 Weight (%):", 0, 100, alpha_config.get('momentum', {}).get('conditions', {}).get('macd_positive', {}).get('weight', 20), 1, key="macd_positive_weight")
             with col2:
                 macd_fast = st.number_input("MACD Fast Period:", 1, 50, indicators_config.get('macd', {}).get('params', {}).get('fast', 12), key="macd_fast")
@@ -2384,11 +2170,11 @@ def main():
             
             # Volume/Volatility Analysis
             st.markdown("---")
-            st.write("**3. Volume/Volatility Analysis (20% weight)**")
+            st.write("**3. Volume/Volatility Analysis**")
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                volume_weight = st.number_input("Volume/Volatility Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('weight', 20), 1, key="volume_weight")
+                volume_weight = st.number_input("Volume/Volatility Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('weight', 25), 1, key="volume_weight")
                 volume_spike_weight = st.number_input("Volume Spike Weight (%):", 0, 100, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('weight', 10), 1, key="volume_spike_weight")
                 volume_spike_multiplier = st.number_input("Volume Multiplier:", 0.5, 5.0, alpha_config.get('volume_volatility', {}).get('conditions', {}).get('volume_spike', {}).get('multiplier', 1.5), 0.01, key="volume_spike_mult")
             with col2:
@@ -2404,19 +2190,9 @@ def main():
                 volume_timeframes = st.multiselect("Volume Timeframes:", VALID_BAR_SIZES,
                     default=default_volume if default_volume else ["3 mins"], key="volume_timeframes")
             
-            # News Analysis
+            # Market Calm Analysis (news hidden from UI; weight 0 written to config)
             st.markdown("---")
-            st.write("**4. News Analysis (15% weight)**")       
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                news_weight = st.number_input("News Weight (%):", 0, 100, alpha_config.get('news', {}).get('weight', 15), 1, key="news_weight")
-            with col2:
-                no_major_news_weight = st.number_input("No Major News Weight (%):", 0, 100, alpha_config.get('news', {}).get('conditions', {}).get('no_major_news', {}).get('weight', 15), 1, key="no_major_news_weight")
-            
-            # Market Calm Analysis
-            st.markdown("---")
-            st.write("**5. Market Calm Analysis (15% weight)**")
+            st.write("**4. Market Calm Analysis**")
             
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -2470,9 +2246,9 @@ def main():
                 tick_threshold = st.number_input("TICK Threshold:", -1000, 1000, checks_config.get('tick_threshold', 0), 50, key="tick_threshold",
                     help="Net uptick buying pressure if TICK MA ≥ threshold", disabled=not trin_tick_check_enabled)
             
-            # Weight Validation
+            # Weight Validation (news not in UI; saved as 0 in config)
             st.markdown("---")
-            total_weight = trend_weight + momentum_weight + volume_weight + news_weight + market_calm_weight
+            total_weight = trend_weight + momentum_weight + volume_weight + market_calm_weight
             if total_weight != 100:
                 st.error(f"Total weight is {total_weight}% (should be 100%)")
             else:
@@ -2480,6 +2256,18 @@ def main():
         
         with tab3:
             st.subheader("Risk Management Configuration")
+            
+            st.write("**Trading Equity**")
+            equity = st.number_input(
+                "Trading Equity ($):",
+                min_value=10000,
+                max_value=10000000,
+                value=config.get('EQUITY', 200000),
+                step=10000,
+                key="equity_global"
+            )
+            st.caption(f"≈ {number_to_words_display(equity, 'dollars')}")
+            st.markdown("---")
             
             risk_config = config.get('RISK_CONFIG', {})
             order_config = config.get('ORDER_CONFIG', {})
@@ -2576,26 +2364,6 @@ def main():
                     value=risk_config.get('daily_drawdown_limit', 0.02), 
                     step=0.001, 
                     key="daily_drawdown", 
-                    format="%.3f"
-                )
-            with col2:
-                monthly_drawdown = st.number_input(
-                    "Monthly Drawdown Limit (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=risk_config.get('monthly_drawdown_limit', 0.08), 
-                    step=0.001, 
-                    key="monthly_drawdown", 
-                    format="%.3f"
-                )
-            with col3:
-                drawdown_alert = st.number_input(
-                    "Drawdown Alert (%):", 
-                    min_value=0.001, 
-                    max_value=1.0, 
-                    value=risk_config.get('drawdown_alert', 0.015), 
-                    step=0.001, 
-                    key="drawdown_alert", 
                     format="%.3f"
                 )
             
@@ -2699,7 +2467,7 @@ def main():
             
             # Trailing Stop Levels
             st.markdown("---")
-            st.write("**Trailing Stop Levels**")
+            st.write("**Trailing Profit Levels**")
             col1, col2 = st.columns(2)
             with col1:
                 trailing_gain1 = st.number_input(
@@ -2918,7 +2686,7 @@ def main():
                 )
             with col2:
                 sp500_recovery_threshold = st.number_input(
-                    "S&P 500 Recovery Threshold (%):", 
+                    "SPY Recovery Threshold (%):", 
                     min_value=0.001, 
                     max_value=0.02, 
                     value=hedge_config.get('exit_conditions', {}).get('sp500_recovery_threshold', 0.006), 
@@ -2927,8 +2695,9 @@ def main():
                     format="%.3f",
                     help="S&P 500 gain threshold to trigger hedge reduction"
                 )
+                # Named Sqqq but is actually qqq
                 sqqq_vwap_consecutive_bars = st.number_input(
-                    "SQQQ VWAP Consecutive Bars:", 
+                    "QQQ Recovery VWAP Bars:", 
                     min_value=1, 
                     max_value=5, 
                     value=hedge_config.get('exit_conditions', {}).get('sqqq_vwap_consecutive_bars', 2), 
@@ -2983,7 +2752,7 @@ def main():
                     help="VIX level to trigger early hedge"
                 )
                 early_spx_drop = st.number_input(
-                    "SPX Drop Threshold (%):", 
+                    "SPY Drop Threshold (%):", 
                     min_value=0.001, 
                     max_value=0.05, 
                     value=hedge_config.get('hedge_levels', {}).get('early', {}).get('spx_drop_threshold', 0.0075), 
@@ -3024,7 +2793,7 @@ def main():
                     help="VIX level to trigger mild hedge"
                 )
                 mild_spx_drop = st.number_input(
-                    "SPX Drop Threshold (%):", 
+                    "SPY Drop Threshold (%):", 
                     min_value=0.001, 
                     max_value=0.05, 
                     value=hedge_config.get('hedge_levels', {}).get('mild', {}).get('spx_drop_threshold', 0.012), 
@@ -3065,7 +2834,7 @@ def main():
                     help="VIX level to trigger severe hedge"
                 )
                 severe_spx_drop = st.number_input(
-                    "SPX Drop Threshold (%):", 
+                    "SPY Drop Threshold (%):", 
                     min_value=0.001, 
                     max_value=0.05, 
                     value=hedge_config.get('hedge_levels', {}).get('severe', {}).get('spx_drop_threshold', 0.02), 
@@ -3299,34 +3068,13 @@ def main():
         st.markdown("---")
         st.subheader("Save All Configuration")
         
-        # Basic Configuration Section
-        st.write("**Basic Configuration**")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            equity = st.number_input(
-                "Trading Equity ($):", 
-                min_value=10000, 
-                max_value=10000000, 
-                value=config.get('EQUITY', 200000), 
-                step=10000,
-                key="equity_global"
-            )
-            st.caption(f"≈ {number_to_words_display(equity, 'dollars')}")
-        with col2:
-            # testing = st.checkbox(
-            #     "Testing Mode Enabled", 
-            #     value=config.get('TESTING', False),
-            #     key="testing_global"
-            # )
-            testing = False
-        
+        testing = False
         if st.button("Save All Configuration", type="primary", key="save_all_config"):
             # Update configuration with all values from tabs
             new_config = {
                 "EQUITY": equity,
                 "TESTING": testing,
-                "VWAP_SHOULD_BE_BELOW_PRICE": vwap_below_price,
+                "VWAP_SHOULD_BE_BELOW_PRICE": True,
                 "STOCK_SELECTION": {
                     "market_cap_min": market_cap_min,
                     "price_min": price_min,
@@ -3362,7 +3110,7 @@ def main():
                     "trend": {"weight": trend_weight, "conditions": {"ema_cross": {"weight": ema_cross_weight}}},
                     "momentum": {"weight": momentum_weight, "conditions": {"macd_positive": {"weight": macd_positive_weight}}},
                     "volume_volatility": {"weight": volume_weight, "conditions": {"volume_spike": {"weight": volume_spike_weight, "multiplier": volume_spike_multiplier}, "adx_threshold": {"weight": adx_weight, "threshold": adx_threshold}}},
-                    "news": {"weight": news_weight, "conditions": {"no_major_news": {"weight": no_major_news_weight}}},
+                    "news": {"weight": 0, "conditions": {"no_major_news": {"weight": 0}}},
                     "market_calm": {"weight": market_calm_weight, "conditions": {"vix_threshold": {"weight": vix_threshold_weight, "threshold": vix_threshold, "timeframe": vix_timeframe_market_calm}}}
                 },
                 "RISK_CONFIG": {
@@ -3371,8 +3119,6 @@ def main():
                     "max_position_equity_pct": max_position_equity_pct,
                     "max_daily_trades": max_daily_trades,
                     "daily_drawdown_limit": daily_drawdown,
-                    "monthly_drawdown_limit": monthly_drawdown,
-                    "drawdown_alert": drawdown_alert,
                     "lower_limit": lower_limit,
                     "upper_limit": upper_limit,
                     "atr_multiplier": atr_multiplier_dd
