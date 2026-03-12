@@ -8,6 +8,7 @@ import time
 from datetime import datetime, time as dtime
 import pytz
 from helpers import vwap, ema, macd, adx, atr
+from helpers.json_utils import dumps_safe
 from helpers.fetch_marketcap_csv import fetch_marketcap_csv
 from log import setup_logger
 from db.trades_db import trades_db
@@ -848,12 +849,14 @@ class Strategy:
             self.indicator_values = {}
         if not hasattr(self, 'criteria_passed'):
             self.criteria_passed = {}
+
         # Always update database with additional checks status and indicator/criteria JSON (regardless of pass/fail)
+        # Use dumps_safe so numpy/pandas scalars in dicts are converted to native Python types before json.dumps
         trades_db.update_strategy_data(
             self.stock,
-            additional_checks_passed=self.additional_checks_passed,
-            indicator_values=json.dumps(self.indicator_values),
-            criteria_passed=json.dumps(self.criteria_passed)
+            additional_checks_passed=bool(self.additional_checks_passed),
+            indicator_values=dumps_safe(self.indicator_values),
+            criteria_passed=dumps_safe(self.criteria_passed)
         )
 
     def _timeframe_to_minutes(self, tf_value):
@@ -996,25 +999,23 @@ class Strategy:
         available_for_sector = max(0, sector_cap - sector_used)
         
         print(f"\n[Position Sizing] {self.stock} (sector: {self.sector})")
-        print(f"  - Base risk: {base_risk_per_trade*100:.2f}%")
-        print(f"  - Sector cap: ${sector_cap:,.0f} ({max_sector_weight*100:.0f}% equity), sector used: ${sector_used:,.0f}, available: ${available_for_sector:,.0f}")
+        print(f"  - Risk per trade: {risk_per_trade*100:.2f}%")
+        print(f"  - Sector capital: ${sector_cap:,.0f} ({max_sector_weight*100:.0f}% equity), sector used: ${sector_used:,.0f}, available: ${available_for_sector:,.0f}")
         
-        stop_loss_pct = self.calculate_stop_loss(current_price)
-        stop_loss_price = current_price * (1 - stop_loss_pct)
-        risk_per_share = current_price - stop_loss_price
-        if risk_per_share <= 0:
-            return 0, 0, 0, 0
-        
-        # Calculate position size based on risk; cap by sector and max position %
-        capital_for_trade = (account_equity * risk_per_trade) / stop_loss_pct
+        # Capital for this trade = sector_capital * risk_per_trade (amount each position in that sector gets)
+        capital_for_trade = sector_cap * risk_per_trade
+        print(f"  - Capital for trade: ${capital_for_trade:,.0f} (sector_cap * risk_per_trade)")
         capital_for_trade = min(capital_for_trade, available_for_sector)
-        if capital_for_trade > (account_equity * creds.RISK_CONFIG.max_position_equity_pct):
-            capital_for_trade = account_equity * creds.RISK_CONFIG.max_position_equity_pct
-            print(f"  - Position capped at {creds.RISK_CONFIG.max_position_equity_pct*100:.0f}% max equity")
+        max_pos_equity = getattr(creds.RISK_CONFIG, 'max_position_equity_pct', 0.1)
+        if capital_for_trade > (account_equity * max_pos_equity):
+            capital_for_trade = account_equity * max_pos_equity
+            print(f"  - Position capped at {max_pos_equity*100:.0f}% max equity")
         if capital_for_trade <= 0:
             print(f"  - No capital left for sector {self.sector} (cap {max_sector_weight*100:.0f}% already used)")
             return 0, 0, 0, 0
         
+        stop_loss_pct = self.calculate_stop_loss(current_price)
+        stop_loss_price = current_price * (1 - stop_loss_pct)
         shares = int(capital_for_trade / current_price)
         
         vwap_tf = self.tf.get('vwap') or '3 mins'
@@ -1028,15 +1029,18 @@ class Strategy:
             print(f"WARNING: VWAP (${vwap_value:.2f}) is NOT below current price (${current_price:.2f}) - skipping order")
             return 0, 0, 0, 0
         
-        # Limit slightly above VWAP (but still below current price when VWAP < current); we use limit (not market) to get the whole position at one price
-        offset_pct = random.uniform(creds.ORDER_CONFIG.limit_offset_min, creds.ORDER_CONFIG.limit_offset_max)
-        limit_price = vwap_value * (1 + offset_pct)
+        # Limit at VWAP ± offset (0.03% to 0.07%); offset applied as + or - at random
+        offset_min = getattr(creds.ORDER_CONFIG, 'limit_offset_min', 0.0003)  # 0.03%
+        offset_max = getattr(creds.ORDER_CONFIG, 'limit_offset_max', 0.0007)   # 0.07%
+        offset_pct = random.uniform(offset_min, offset_max)
+        sign = random.choice([1, -1])
+        limit_price = vwap_value * (1 + sign * offset_pct)
         
         print(f"Position Size: {shares} shares")
         print(f"Entry Price: ${current_price:.2f}")
         print(f"Stop Loss: ${stop_loss_price:.2f} ({stop_loss_pct*100:.1f}%)")
         print(f"VWAP: ${vwap_value:.2f}")
-        print(f"Limit Order Price: ${limit_price:.2f} (VWAP * (1 + {offset_pct*100:.3f}%))")
+        print(f"Limit Order Price: ${limit_price:.2f} (VWAP {'+' if sign == 1 else '-'} {offset_pct*100:.2f}%)")
         
         # Update database with current price and position calculations
         trades_db.update_strategy_data(self.stock, 
