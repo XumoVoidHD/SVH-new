@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, time
 import pytz
 import json
 import os
+from typing import Any, Dict, List
 import num2words
 from streamlit_autorefresh import st_autorefresh
 
@@ -303,6 +304,23 @@ def load_config():
     except Exception as e:
         st.error(f"Error loading configuration: {str(e)}")
         return {}
+
+def _load_entry_decisions() -> Dict[str, Any]:
+    """Load entry decision feed written by main.py (entry_decisions.json)."""
+    try:
+        path = os.path.join(os.getcwd(), "entry_decisions.json")
+        if not os.path.exists(path):
+            return {"updated_at": None, "decisions": []}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"updated_at": None, "decisions": []}
+        decisions = data.get("decisions", [])
+        if not isinstance(decisions, list):
+            decisions = []
+        return {"updated_at": data.get("updated_at"), "decisions": decisions}
+    except Exception:
+        return {"updated_at": None, "decisions": []}
 
 # Function to save configuration to creds.json
 def save_config(config):
@@ -745,6 +763,53 @@ def main():
                     except Exception as e:
                         st.metric("Start Date", "N/A")
                 st.markdown("---")
+
+            # ===== ENTRY DECISIONS (WHY WE DIDN'T ENTER) =====
+            try:
+                feed = _load_entry_decisions()
+                decisions = feed.get("decisions", [])
+                if decisions:
+                    st.markdown("### Entry Decisions (Why we did / didn't enter)")
+                    st.caption("This explains, in plain English, why the bot entered or skipped recent stocks.")
+
+                    # Show newest first
+                    decisions = list(reversed(decisions))
+                    max_rows = st.slider("Show last N decisions", min_value=5, max_value=200, value=25, step=5, key="entry_decisions_max_rows")
+                    decisions = decisions[:max_rows]
+
+                    rows: List[Dict[str, Any]] = []
+                    for d in decisions:
+                        if not isinstance(d, dict):
+                            continue
+                        reasons = d.get("reasons", [])
+                        if isinstance(reasons, list):
+                            reason_text = "; ".join([str(x) for x in reasons if str(x).strip()])
+                        else:
+                            reason_text = str(reasons)
+                        details = d.get("details", {}) if isinstance(d.get("details", {}), dict) else {}
+
+                        rows.append({
+                            "Time": d.get("time", ""),
+                            "Symbol": d.get("symbol", ""),
+                            "Decision": d.get("decision", ""),
+                            "Reason(s)": reason_text,
+                            "Score": details.get("score", ""),
+                            "Alpha Threshold": details.get("alpha_threshold", ""),
+                            "Sector": details.get("sector", ""),
+                            "Shares": details.get("filled_shares", details.get("shares", details.get("requested_shares", ""))),
+                            "Price": details.get("fill_price", details.get("limit_price", details.get("entry_price_est", ""))),
+                        })
+
+                    if rows:
+                        st.dataframe(pd.DataFrame(rows), width="stretch")
+                    else:
+                        st.info("Entry decision feed is present, but no readable rows were found.")
+                    st.markdown("---")
+                else:
+                    # Don't show an error; just keep UI clean if bot hasn't written anything yet.
+                    pass
+            except Exception as e:
+                st.warning(f"Could not load entry decisions: {e}")
             
             # Add filter options in a single row
             col1, col2, col3, col4 = st.columns(4)
@@ -2197,7 +2262,7 @@ def main():
             with col1:
                 market_calm_weight = st.number_input("Market Calm Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('weight', 15), 1, key="market_calm_weight")
             with col2:
-                vix_threshold = st.number_input("VIX Threshold:", 10, 50, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 1, key="alpha_vix_threshold")
+                alpha_vix_threshold = st.number_input("VIX Threshold:", 10, 50, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('threshold', 20), 1, key="alpha_vix_threshold")
             with col3:
                 vix_threshold_weight = st.number_input("VIX Weight (%):", 0, 100, alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('weight', 15), 1, key="vix_threshold_weight")
                 default_vix_market_calm = normalize_timeframe(alpha_config.get('market_calm', {}).get('conditions', {}).get('vix_threshold', {}).get('timeframe', '3 mins'))
@@ -2624,7 +2689,7 @@ def main():
                     index=hedge_options.index(current_hedge) if current_hedge in hedge_options else 0,
                     key="hedge_symbol"
                 )
-                vix_threshold = st.number_input(
+                hedge_vix_threshold = st.number_input(
                     "VIX Threshold:", 
                     min_value=15, 
                     max_value=50, 
@@ -3102,7 +3167,7 @@ def main():
                     "momentum": {"weight": momentum_weight, "conditions": {"macd_positive": {"weight": macd_positive_weight}}},
                     "volume_volatility": {"weight": volume_weight, "conditions": {"volume_spike": {"weight": volume_spike_weight, "multiplier": volume_spike_multiplier}, "adx_threshold": {"weight": adx_weight, "threshold": adx_threshold}}},
                     "news": {"weight": 0, "conditions": {"no_major_news": {"weight": 0}}},
-                    "market_calm": {"weight": market_calm_weight, "conditions": {"vix_threshold": {"weight": vix_threshold_weight, "threshold": vix_threshold, "timeframe": vix_timeframe_market_calm}}}
+                    "market_calm": {"weight": market_calm_weight, "conditions": {"vix_threshold": {"weight": vix_threshold_weight, "threshold": alpha_vix_threshold, "timeframe": vix_timeframe_market_calm}}}
                 },
                 "RISK_CONFIG": {
                     "alpha_score_threshold": alpha_threshold,
@@ -3141,7 +3206,7 @@ def main():
                     "hedge_symbol": hedge_symbol,
                     "hedge_options": hedge_options,
                     "triggers": {
-                        "vix_threshold": vix_threshold, 
+                        "vix_threshold": hedge_vix_threshold, 
                         "sp500_drop_threshold": sp500_drop_threshold,
                         "vix_timeframe": vix_timeframe_triggers
                     },

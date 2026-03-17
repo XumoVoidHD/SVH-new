@@ -49,29 +49,12 @@ class TradesDatabase:
         
         for attempt in range(max_retries):
             try:
-                # Check if database file exists and is writable
+                # Basic existence logging; let sqlite handle locks/permissions via connect()
                 if os.path.exists(self.db_path):
-                    if not os.access(self.db_path, os.W_OK):
-                        # Try to fix permissions (read-only flag on Windows)
-                        try:
-                            import stat
-                            current_permissions = os.stat(self.db_path).st_mode
-                            os.chmod(self.db_path, current_permissions | stat.S_IWRITE)
-                            print(f"Fixed write permissions for database file: {self.db_path}")
-                        except Exception as perm_error:
-                            raise PermissionError(f"Database file {self.db_path} is not writable and cannot be fixed: {perm_error}")
-                    
-                    # Also check if the file is actually writable by trying to open it
-                    try:
-                        test_file = open(self.db_path, 'r+b')
-                        test_file.close()
-                    except Exception as test_error:
-                        raise PermissionError(f"Database file {self.db_path} cannot be opened for writing: {test_error}")
-                    
-                    print(f"Database file exists and is writable: {self.db_path}")
+                    print(f"Database file exists: {self.db_path}")
                 else:
                     print(f"Database file does not exist, will be created: {self.db_path}")
-                
+
                 conn = sqlite3.connect(self.db_path, timeout=timeout, check_same_thread=False)
                 conn.execute('PRAGMA journal_mode=WAL')
                 conn.execute('PRAGMA synchronous=NORMAL')
@@ -111,8 +94,15 @@ class TradesDatabase:
                 else:
                     raise e
             except PermissionError as e:
-                # Don't retry permission errors, they won't fix themselves
-                raise e
+                # Treat PermissionError similar to a transient lock: retry a few times before giving up.
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    print(f"Database PermissionError, retrying in {delay:.2f} seconds... (attempt {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(delay)
+                    continue
+                else:
+                    # After all retries, re-raise so caller can decide how to handle it.
+                    raise e
             except Exception as e:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
@@ -201,9 +191,10 @@ class TradesDatabase:
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='stock_strategies'")
                 table_exists = cursor.fetchone()
                 if table_exists:
-                    print("✓ Database initialization completed successfully")
+                    # Avoid UnicodeEncodeError on some Windows consoles (cp1252)
+                    print("Database initialization completed successfully")
                 else:
-                    print("✗ Database initialization failed - table not found after creation")
+                    print("Database initialization failed - table not found after creation")
                 
                 conn.close()
         except Exception as e:
@@ -224,11 +215,12 @@ class TradesDatabase:
                 table_exists = cursor.fetchone()
                 
                 if table_exists:
-                    print("✓ Database verification passed - stock_strategies table exists")
+                    # Avoid UnicodeEncodeError on some Windows consoles (cp1252)
+                    print("Database verification passed - stock_strategies table exists")
                     conn.close()
                     return True
                 else:
-                    print("✗ Database verification failed - stock_strategies table not found")
+                    print("Database verification failed - stock_strategies table not found")
                     conn.close()
                     return False
         except Exception as e:
@@ -429,64 +421,79 @@ class TradesDatabase:
     
     def update_strategy_data(self, symbol, **kwargs):
         """Update strategy data for a specific stock"""
-        with self.lock:
-            conn = self._get_connection()
-            cursor = conn.cursor()
-            
-            # Prepare the update query dynamically
-            update_fields = []
-            values = []
-            
-            for key, value in kwargs.items():
-                if key in [
-                    'score', 'additional_checks_passed', 'position_active',
-                    'position_shares', 'shares', 'current_price', 'entry_price', 
-                    'stop_loss_price', 'take_profit_price', 'used_capital', 
-                    'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
-                    'profit_booking_levels',
-                    'trailing_exit_conditions', 'trailing_stop_levels',
-                    'profit_booked_flags', 'trailing_stop_flags',
-                    'trailing_exit_monitoring', 'trailing_exit_start_time',
-                    'trailing_exit_start_price', 'total_trades', 'winning_trades',
-                    'losing_trades', 'total_pnl', 'avg_trade_duration',
-                    'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
-                    'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
-                    'hedge_exit_price', 'hedge_pnl',
-                    'indicator_values', 'criteria_passed',
-                    'sector'
-                ]:
-                    update_fields.append(f"{key} = ?")
-                    values.append(value)
-            
-            if update_fields:
-                            # Convert datetime objects and complex types
-                for i, value in enumerate(values):
-                    if isinstance(value, datetime):
-                        values[i] = value.isoformat()
-                    elif isinstance(value, (dict, list)):
-                        values[i] = json.dumps(value)
-                    elif isinstance(value, bool):
-                        # Ensure boolean values are stored as integers (0/1) in SQLite
-                        values[i] = 1 if value else 0
+        conn = None
+        try:
+            with self.lock:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                # Prepare the update query dynamically
+                update_fields = []
+                values = []
+                
+                for key, value in kwargs.items():
+                    if key in [
+                        'score', 'additional_checks_passed', 'position_active',
+                        'position_shares', 'shares', 'current_price', 'entry_price', 
+                        'stop_loss_price', 'take_profit_price', 'used_capital', 
+                        'unrealized_pnl', 'realized_pnl', 'entry_time', 'close_time',
+                        'profit_booking_levels',
+                        'trailing_exit_conditions', 'trailing_stop_levels',
+                        'profit_booked_flags', 'trailing_stop_flags',
+                        'trailing_exit_monitoring', 'trailing_exit_start_time',
+                        'trailing_exit_start_price', 'total_trades', 'winning_trades',
+                        'losing_trades', 'total_pnl', 'avg_trade_duration',
+                        'hedge_active', 'hedge_shares', 'hedge_symbol', 'hedge_level',
+                        'hedge_beta', 'hedge_entry_price', 'hedge_entry_time',
+                        'hedge_exit_price', 'hedge_pnl',
+                        'indicator_values', 'criteria_passed',
+                        'sector'
+                    ]:
+                        update_fields.append(f"{key} = ?")
+                        values.append(value)
+                
+                if update_fields:
+                    # Convert datetime objects and complex types
+                    for i, value in enumerate(values):
+                        if isinstance(value, datetime):
+                            values[i] = value.isoformat()
+                        elif isinstance(value, (dict, list)):
+                            values[i] = json.dumps(value)
+                        elif isinstance(value, bool):
+                            # Ensure boolean values are stored as integers (0/1) in SQLite
+                            values[i] = 1 if value else 0
 
-                # Add symbol and updated_at to the update
-                update_fields.append("updated_at = CURRENT_TIMESTAMP")
-                values.append(symbol)
+                    # Add symbol and updated_at to the update
+                    update_fields.append("updated_at = CURRENT_TIMESTAMP")
+                    values.append(symbol)
+                    
+                    query = f'''
+                        UPDATE stock_strategies 
+                        SET {', '.join(update_fields)}
+                        WHERE symbol = ?
+                    '''
+                    
+                    cursor.execute(query, values)
+                    
+                    # If no rows were updated, insert a new record using the same connection
+                    if cursor.rowcount == 0:
+                        self._insert_strategy_data_with_connection(cursor, symbol, **kwargs)
                 
-                query = f'''
-                    UPDATE stock_strategies 
-                    SET {', '.join(update_fields)}
-                    WHERE symbol = ?
-                '''
-                
-                cursor.execute(query, values)
-                
-                # If no rows were updated, insert a new record using the same connection
-                if cursor.rowcount == 0:
-                    self._insert_strategy_data_with_connection(cursor, symbol, **kwargs)
-            
-            conn.commit()
-            conn.close()
+                conn.commit()
+        except Exception as e:
+            # Log and skip this update instead of crashing the calling thread
+            print(f"[trades_db.update_strategy_data] Error updating data for {symbol}: {e}")
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     def _insert_strategy_data_with_connection(self, cursor, symbol, **kwargs):
         """Insert new strategy data record using existing connection (internal method)"""

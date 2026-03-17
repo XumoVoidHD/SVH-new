@@ -18,39 +18,7 @@ from simulation.ib_broker import IBBroker
 import traceback
 import atexit
 import os
-from ib_insync import IB, Index, util
-
-# Lock for TRIN/TICK fetches via ib_insync (single connection at a time)
-_trin_tick_fetch_lock = threading.Lock()
-_ib_insync_client_id = 16
-
-def get_trin_tick_historical_data(symbol, duration="1 D", bar_size="1 min"):
-    """Fetch TRIN-NYSE or TICK-NYSE historical bars using ib_insync. Returns DataFrame with date, close or None."""
-    with _trin_tick_fetch_lock:
-        try:
-            ib = IB()
-            ib.connect("127.0.0.1", 7497, clientId=_ib_insync_client_id, timeout=10)
-            contract = Index(symbol, "NYSE", "USD")
-            bars = ib.reqHistoricalData(
-                contract,
-                endDateTime="",
-                durationStr=duration,
-                barSizeSetting=bar_size,
-                whatToShow="TRADES",
-                useRTH=False,
-                formatDate=1,
-                timeout=30,
-            )
-            ib.disconnect()
-            if bars:
-                df = util.df(bars)
-                if df is not None and not df.empty and "close" in df.columns:
-                    if "date" not in df.columns and hasattr(bars[0], "date"):
-                        df["date"] = [b.date for b in bars]
-                    return df
-        except Exception as e:
-            print(f"ib_insync TRIN/TICK fetch for {symbol}: {e}")
-        return None
+from typing import Any, Dict, List, Optional
 
 def update_bot_status(bot_on, initializing):
     """Update the bot status in bot_status.json"""
@@ -92,6 +60,55 @@ def load_config(json_file='creds.json'):
 
 creds = load_config('creds.json')
 TESTING = creds.TESTING
+
+# ---------------------------
+# Frontend-friendly entry decision feed (no DB migration)
+# ---------------------------
+_ENTRY_DECISIONS_LOCK = threading.Lock()
+
+def _write_entry_decision(symbol: str, decision: str, reasons: List[str], details: Optional[Dict[str, Any]] = None):
+    """
+    Persist a short, human-readable reason for why we did/didn't enter a stock.
+    db_viewer.py reads this file and shows it above the table.
+    """
+    try:
+        eastern_tz = pytz.timezone("US/Eastern")
+        now = datetime.now(eastern_tz).strftime("%Y-%m-%d %H:%M:%S")
+        item: Dict[str, Any] = {
+            "time": now,
+            "symbol": str(symbol),
+            "decision": str(decision),  # "entered" | "rejected" | "order_failed"
+            "reasons": [str(r) for r in (reasons or [])],
+            "details": details or {},
+        }
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entry_decisions.json")
+        with _ENTRY_DECISIONS_LOCK:
+            existing: Dict[str, Any] = {"updated_at": now, "decisions": []}
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                        if isinstance(loaded, dict):
+                            existing = loaded
+                except Exception:
+                    existing = {"updated_at": now, "decisions": []}
+
+            decisions = existing.get("decisions", [])
+            if not isinstance(decisions, list):
+                decisions = []
+
+            decisions.append(item)
+            decisions = decisions[-200:]  # bound growth
+
+            out = {"updated_at": now, "decisions": decisions}
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(out, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)
+    except Exception as e:
+        # Never let logging break trading
+        print(f"[ENTRY FEED] Could not write entry_decisions.json: {e}")
 
 class Strategy:
     
@@ -841,6 +858,7 @@ class Strategy:
                     failed.append("VWAP slope")
                 if not market_conditions_check:
                     failed.append("TRIN/TICK")
+                self.additional_checks_failed = failed
                 if self.additional_checks_passed:
                     print(f"  OVERALL: PASSED — volume, VWAP slope, and market conditions all passed.")
                 else:
@@ -938,10 +956,11 @@ class Strategy:
             trin_threshold = self.additional_checks_config.trin_threshold
             tick_ma_window = self.additional_checks_config.tick_ma_window
             tick_threshold = self.additional_checks_config.tick_threshold
-            
-            # Check TRIN (NYSE TRIN index) - should be <= threshold; use ib_insync for reliable TRIN-NYSE data
+
+            # Check TRIN (NYSE TRIN index) - should be <= threshold
             # TRIN > 1.0 indicates bearish sentiment, TRIN < 1.0 indicates bullish
-            trin_data = get_trin_tick_historical_data("TRIN-NYSE", duration="1 D", bar_size="1 min")
+            # Use specialized TRIN/TICK helper so contract matches IBKR expectations
+            trin_data = self.broker.get_trin_tick_data("TRIN-NYSE", exchange="NYSE", duration="1 D", bar_size="1 min")
             trin_check = False
             
             if trin_data is not None and not trin_data.empty and 'close' in trin_data.columns:
@@ -953,9 +972,9 @@ class Strategy:
                 if hasattr(self, 'criteria_passed'):
                     self.criteria_passed['trin_tick_passed'] = False
                 return False
-            # Check TICK (NYSE TICK) - MA should be >= threshold; use ib_insync for reliable TICK-NYSE data
+            # Check TICK (NYSE TICK) - MA should be >= threshold
             # TICK shows net upticks minus downticks, positive = more buying pressure
-            tick_data = get_trin_tick_historical_data("TICK-NYSE", duration="1 D", bar_size="1 min")
+            tick_data = self.broker.get_trin_tick_data("TICK-NYSE", exchange="NYSE", duration="1 D", bar_size="1 min")
             tick_check = False
             current_tick_ma = None
             if tick_data is not None and not tick_data.empty and 'close' in tick_data.columns:
@@ -1101,6 +1120,20 @@ class Strategy:
                 with self.manager.manager_lock:
                     if self.manager.available_capital < shares * entry_price:
                         print(f"Not enough available capital to place order for {self.stock}")
+                        _write_entry_decision(
+                            self.stock,
+                            "rejected",
+                            ["Not enough available capital to place order"],
+                            details={
+                                "score": float(self.score),
+                                "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                                "required_cash": float(shares * entry_price),
+                                "available_cash": float(self.manager.available_capital),
+                                "shares": int(shares),
+                                "entry_price_est": float(entry_price),
+                                "limit_price": float(limit_price),
+                            },
+                        )
                         return
                     else:
                         print(f"Enough available capital to place order for {self.stock}")
@@ -1108,6 +1141,17 @@ class Strategy:
                 trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="LIMIT", price=round(limit_price, 2), side="BUY")
                 if int(trade[1]) == -1:
                     print(f"Unable to place order for {self.stock}")
+                    _write_entry_decision(
+                        self.stock,
+                        "order_failed",
+                        ["Limit order was not filled (timed out or rejected)"],
+                        details={
+                            "score": float(self.score),
+                            "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                            "limit_price": float(limit_price),
+                            "requested_shares": int(shares),
+                        },
+                    )
                     return
                 else:
                     if trade[2] != shares:
@@ -1161,11 +1205,41 @@ class Strategy:
                         used_capital=self.used_capital,
                         sector=self.sector
                     )
+                    _write_entry_decision(
+                        self.stock,
+                        "entered",
+                        ["Entry conditions met and order filled"],
+                        details={
+                            "score": float(self.score),
+                            "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                            "filled_shares": int(shares),
+                            "fill_price": float(trade[1]),
+                            "sector": str(self.sector),
+                        },
+                    )
         else:
+            reasons = []
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
                 print(f"Alpha Score too low: {self.score} < {creds.RISK_CONFIG.alpha_score_threshold}")
+                reasons.append(f"Alpha score {self.score:.1f} < required {creds.RISK_CONFIG.alpha_score_threshold}")
             if not bool(self.additional_checks_passed):
                 print("Additional checks failed")
+                failed = getattr(self, "additional_checks_failed", None)
+                if isinstance(failed, list) and failed:
+                    reasons.append(f"Additional checks failed: {', '.join([str(x) for x in failed])}")
+                else:
+                    reasons.append("Additional checks failed")
+            if reasons:
+                _write_entry_decision(
+                    self.stock,
+                    "rejected",
+                    reasons,
+                    details={
+                        "score": float(self.score),
+                        "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                        "additional_checks_passed": bool(self.additional_checks_passed),
+                    },
+                )
         return -1
                     
     def run(self, i):
@@ -1229,7 +1303,7 @@ class Strategy:
             
             self.unrealized_pnl = (self.current_price - self.entry_price) * self.position_shares
             with self.manager.manager_lock:
-                self.manager.unrealized_pnl -= self.unrealized_pnl
+                self.manager.unrealized_pnl += self.unrealized_pnl
             
             # Calculate current gain/loss percentage
             current_gain_pct = (self.current_price - self.entry_price) / self.entry_price
@@ -1750,6 +1824,41 @@ class StrategyBroker:
             req_id = self.request_id_counter + 3000  # Offset for index data
             self.request_id_counter += 1
         return self.ib_broker.get_historical_data_index(symbol, req_id, duration, bar_size)
+
+    def get_trin_tick_data(self, symbol, exchange="NYSE",
+                           duration="1 D", bar_size="1 min", what_to_show="TRADES"):
+        """Specialized helper for TRIN/TICK NYSE internals using explicit index contract.
+
+        what_to_show maps to IBKR's historical data types, e.g. "TRADES", "BID", "ASK".
+        """
+        # Valid bar sizes according to IBKR API
+        valid_bar_sizes = {
+            '1 secs', '5 secs', '10 secs', '15 secs', '30 secs',
+            '1 min', '2 mins', '3 mins', '5 mins', '10 mins', '15 mins', '20 mins', '30 mins',
+            '1 hour', '2 hours', '3 hours', '4 hours', '8 hours',
+            '1 day', '1W', '1M'
+        }
+
+        # Convert bar_size to proper IBKR format
+        if isinstance(bar_size, (int, str)) and str(bar_size).isdigit():
+            if int(bar_size) == 1:
+                bar_size = "1 min"
+            else:
+                bar_size = f"{bar_size} mins"
+        elif isinstance(bar_size, str) and bar_size.endswith(' min'):
+            if not bar_size.startswith('1 '):
+                bar_size = bar_size.replace(' min', ' mins')
+
+        if bar_size not in valid_bar_sizes:
+            print(f"Warning: Invalid bar size '{bar_size}'. Using '1 min' as fallback.")
+            bar_size = '1 min'
+
+        with self.counter_lock:
+            req_id = self.request_id_counter + 4500  # Separate offset for TRIN/TICK data
+            self.request_id_counter += 1
+        return self.ib_broker.get_trin_tick_historical(
+            symbol, exchange, req_id, duration, bar_size, what_to_show
+        )
 
     def is_connected(self):
         """Check if connected to IBKR"""
@@ -2546,7 +2655,14 @@ class StrategyManager:
 
                 if total_pnl <= -threshold and not self.max_drawdown_triggered:
                     which = "fixed (hard)" if threshold == fixed_limit else "dynamic"
-                    print(f"Daily drawdown limit hit ({which}): loss ${-total_pnl:,.0f} >= ${threshold:,.0f}. Stopping all strategies.")
+                    print(f"Daily drawdown limit hit ({which}): loss ${-total_pnl:,.0f} >= ${threshold:,.0f}. Stopping all strategies and closing hedge.")
+                    # If a centralized hedge is active, close it before stopping strategies
+                    try:
+                        if hasattr(self, "is_hedge_active") and self.is_hedge_active():
+                            print("[Drawdown] Active hedge detected - closing hedge due to drawdown stop.")
+                            self.close_hedge()
+                    except Exception as hedge_err:
+                        print(f"[Drawdown] Error while closing hedge on drawdown stop: {hedge_err}")
                     self.max_drawdown_triggered = True
                     self.stop_event.set()
 

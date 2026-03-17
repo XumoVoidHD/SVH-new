@@ -118,7 +118,7 @@
             "conditions": {
                 "vix_threshold": {
                     "weight": 15,
-                    "threshold": 40,
+                    "threshold": 41,
                     "timeframe": "3 mins"
                 }
             }

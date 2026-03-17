@@ -189,7 +189,7 @@ class IBBroker(EWrapper, EClient):
         return None
     
     def get_historical_data_index(self, symbol, reqId, duration="1 D", bar_size="1 min"):
-        """Get historical data for index symbols like TRIN-NYSE, TICK-NYSE"""
+        """Generic index historical data helper (still available if needed)."""
         contract = self.index_contract(symbol)
         self.reqHistoricalData(
             reqId,
@@ -198,6 +198,42 @@ class IBBroker(EWrapper, EClient):
             duration,      # duration parameter
             bar_size,      # bar size parameter
             "TRADES",      # data type
+            0,             # useRTH (0 = include extended hours)
+            1,             # formatDate
+            False,         # keepUpToDate
+            []
+        )
+
+        for _ in range(30):
+            time.sleep(0.5)
+            with self.lock:
+                if reqId in self.historical_data:
+                    df = pd.DataFrame(self.historical_data[reqId])
+                    df["date"] = pd.to_datetime(df["date"])
+                    return df
+        return None
+
+    def get_trin_tick_historical(self, symbol, exchange, reqId,
+                                 duration="1 D", bar_size="1 min", what_to_show="TRADES"):
+        """
+        Get historical data for NYSE internals like TRIN/TICK using an explicit index contract.
+        This mirrors the ib_insync pattern:
+            Index(symbol='TICK-NYSE', exchange='NYSE')
+        but uses ibapi only.
+        """
+        contract = Contract()
+        contract.symbol = symbol
+        contract.secType = "IND"
+        contract.exchange = exchange
+        contract.currency = "USD"
+
+        self.reqHistoricalData(
+            reqId,
+            contract,
+            "",            # endDateTime ("" = now)
+            duration,      # duration parameter
+            bar_size,      # bar size parameter
+            what_to_show,  # data type (e.g. "TRADES", "BID", "ASK", etc.)
             0,             # useRTH (0 = include extended hours)
             1,             # formatDate
             False,         # keepUpToDate

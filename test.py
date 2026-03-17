@@ -1,33 +1,34 @@
-"""Test TRIN-NYSE historical data fetch using ib_insync (same as main.py additional checks)."""
-from ib_insync import IB, Index, util
+"""Simple test to verify TRIN-NYSE and TICK-NYSE historical data using StrategyBroker/IBBroker (ibapi only)."""
 
-ib = IB()
-ib.connect("127.0.0.1", 7497, clientId=199)
-print("Connected. Requesting TRIN-NYSE 1 min, 1 D...")
+from main import StrategyBroker  # uses simulation.ib_broker.IBBroker under the hood
 
-# TRIN-NYSE: full symbol, exchange NYSE, secType IND (per IBKR)
-contract = Index("TICK-NYSE", "NYSE", "USD")
-bars = ib.reqHistoricalData(
-    contract,
-    endDateTime="",
-    durationStr="1 D",
-    barSizeSetting="1 min",
-    whatToShow="TRADES",
-    useRTH=False,
-    formatDate=1,
-    timeout=30,
-)
 
-if bars:
-    df = util.df(bars)
-    if df is not None and not df.empty:
-        print(f"TRIN-NYSE: got {len(df)} bars")
-        print(df.tail(10))
-        if "close" in df.columns:
-            print(f"Latest TRIN close: {df['close'].iloc[-1]}")
-    else:
-        print("TRIN-NYSE: no bars in response")
-else:
-    print("TRIN-NYSE: no data returned (timeout or symbol not available)")
+def print_index_summary(name, df):
+    if df is None:
+        print(f"{name}: NO DATA (None returned)")
+        return
+    if df.empty:
+        print(f"{name}: NO ROWS (empty DataFrame)")
+        return
+    print(f"{name}: got {len(df)} bars")
+    print(df.tail(5))
+    if "close" in df.columns:
+        print(f"{name}: latest close = {df['close'].iloc[-1]}")
 
-ib.disconnect()
+
+def main():
+    broker = StrategyBroker(host="127.0.0.1", port=7497, client_id=199)
+    print("Connected via StrategyBroker. Requesting TRIN-NYSE and TICK-NYSE (1 D, 1 min)...")
+
+    # Use specialized TRIN/TICK helper to mirror ib_insync Index(symbol='TICK-NYSE', exchange='NYSE')
+    trin_df = broker.get_trin_tick_data("TRIN-NYSE", exchange="NYSE", duration="1 D", bar_size="1 min")
+    tick_df = broker.get_trin_tick_data("TICK-NYSE", exchange="NYSE", duration="1 D", bar_size="1 min")
+
+    print_index_summary("TRIN-NYSE", trin_df)
+    print_index_summary("TICK-NYSE", tick_df)
+
+    broker.disconnect()
+
+
+if __name__ == "__main__":
+    main()
