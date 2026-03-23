@@ -273,11 +273,11 @@ class IBBroker(EWrapper, EClient):
                     filled = self.order_status[order_id].get('filled', 0)
                     avg_price = self.order_status[order_id].get('avgFillPrice', 0)
                     if status == 'Filled':
-                        return order_id, avg_price
+                        return order_id, avg_price, filled
                     elif status in ['Cancelled', 'Rejected']:
                         if filled > 0:
-                            return order_id, avg_price
-                        return order_id, -1
+                            return order_id, avg_price, filled
+                        return order_id, -1, 0
         
         self.cancel_order(order_id)
         with self.lock:
@@ -285,8 +285,8 @@ class IBBroker(EWrapper, EClient):
                 filled = self.order_status[order_id].get('filled', 0)
                 avg_price = self.order_status[order_id].get('avgFillPrice', 0)
                 if filled > 0:
-                    return order_id, avg_price
-        return order_id, -1
+                    return order_id, avg_price, filled
+        return order_id, -1, 0
 
     def place_limit_order_with_id(self, symbol, quantity, limit_price, action, order_id, order_window=60):
         """Place limit order with specific order ID. Waits up to order_window seconds for fill, then cancels if not filled."""

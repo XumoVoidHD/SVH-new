@@ -1207,7 +1207,7 @@ class Strategy:
                 print(f"Order Details:")
                 print(f"  - Symbol: {self.stock}")
                 print(f"  - Shares: {shares}")
-                print(f"  - Limit Price: ${limit_price:.2f}")
+                print(f"  - Estimated Limit Price (not used for market order): ${limit_price:.2f}")
                 print(f"  - Stop Loss: ${stop_loss:.2f}")
                 print(f"  - Exit: Market-On-Close at 4:00 PM ET")
                 
@@ -1232,27 +1232,32 @@ class Strategy:
                     else:
                         print(f"Enough available capital to place order for {self.stock}")
 
-                trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="LIMIT", price=round(limit_price, 2), side="BUY")
-                if int(trade[1]) == -1:
+                # Use a market order and take avgFillPrice + filled qty returned by IB.
+                # StrategyBroker.place_order(..., order_type="MARKET") returns (order_id, avg_price, filled_qty)
+                trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="MARKET", side="BUY")
+                avg_fill_price = trade[1] if trade and len(trade) > 1 else -1
+                filled_qty = int(trade[2]) if trade and len(trade) > 2 else 0
+                if float(avg_fill_price) == -1 or filled_qty <= 0:
                     print(f"Unable to place order for {self.stock}")
                     _write_entry_decision(
                         self.stock,
                         "order_failed",
-                        ["Limit order was not filled (timed out or rejected)"],
+                        ["Market order was not filled (timed out or rejected)"],
                         details={
                             "score": float(self.score),
                             "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
                             "limit_price": float(limit_price),
                             "requested_shares": int(shares),
+                            "filled_shares": int(filled_qty),
                         },
                     )
                     return
                 else:
-                    if trade[2] != shares:
-                        print(f"Order partially filled for {self.stock}: {trade}")
-                    shares = trade[2]
-                    print(f"Order placed for {self.stock}: {trade}")
-                    cost = shares * trade[1]
+                    if filled_qty != shares:
+                        print(f"Market order partially filled for {self.stock}: requested={shares}, filled={filled_qty}")
+                    shares = filled_qty
+                    print(f"Order placed for {self.stock}: {trade} (avg_fill_price={avg_fill_price}, filled={filled_qty})")
+                    cost = shares * float(avg_fill_price)
                     with self.manager.manager_lock:
                         self.used_capital += cost
                         self.manager.available_capital -= cost
@@ -1264,7 +1269,7 @@ class Strategy:
                         print(f"Stock Invested Capital: ${self.manager.stock_invested_capital:.2f}")
                         print(f"Sector '{self.sector}' used capital: ${self.manager.sector_used_capital.get(self.sector, 0):,.0f}")
 
-                    self.entry_price = trade[1]
+                    self.entry_price = float(avg_fill_price)
                     self.stop_loss_price = stop_loss
                     self.take_profit_price = self.entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
                     self.position_shares = shares
@@ -1275,7 +1280,7 @@ class Strategy:
 
                     eastern_tz = pytz.timezone('US/Eastern')
                     self.entry_time = datetime.now(eastern_tz)
-                    self.current_price = trade[1]
+                    self.current_price = float(avg_fill_price)
                     # self.unrealized_pnl = 0.0
                     # self.realized_pnl = 0.0
                     print(f"Position tracking initialized for {self.stock}:")
