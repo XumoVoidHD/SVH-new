@@ -9,6 +9,10 @@ from typing import Any, Dict, List
 import num2words
 from streamlit_autorefresh import st_autorefresh
 
+# Feature toggles
+# Set to False if you want to hide the Entry Decisions panel.
+SHOW_ENTRY_DECISIONS_PANEL = True
+
 # Ordered columns for expanded indicator/criteria: indicator(s) then criteria that use them (main dashboard simplified view)
 INDICATOR_CRITERIA_COLUMN_ORDER = [
     "vwap", "ema1", "ema2", "trend_passed", "price_above_vwap", "ema_cross",
@@ -765,51 +769,157 @@ def main():
                 st.markdown("---")
 
             # ===== ENTRY DECISIONS (WHY WE DIDN'T ENTER) =====
-            try:
-                feed = _load_entry_decisions()
-                decisions = feed.get("decisions", [])
-                if decisions:
-                    st.markdown("### Entry Decisions (Why we did / didn't enter)")
-                    st.caption("This explains, in plain English, why the bot entered or skipped recent stocks.")
+            if SHOW_ENTRY_DECISIONS_PANEL:
+                try:
+                    feed = _load_entry_decisions()
+                    decisions = feed.get("decisions", [])
+                    if decisions:
+                        st.markdown("### Entry Decisions (Why we did / didn't enter)")
+                        st.caption("This explains, in plain English, why the bot entered or skipped recent stocks.")
 
-                    # Show newest first
-                    decisions = list(reversed(decisions))
-                    max_rows = st.slider("Show last N decisions", min_value=5, max_value=200, value=25, step=5, key="entry_decisions_max_rows")
-                    decisions = decisions[:max_rows]
+                        # Show newest first
+                        decisions = list(reversed(decisions))
+                        max_rows = st.slider("Show last N decisions", min_value=5, max_value=3000, value=50, step=5, key="entry_decisions_max_rows")
+                        decisions = decisions[:max_rows]
 
-                    rows: List[Dict[str, Any]] = []
-                    for d in decisions:
-                        if not isinstance(d, dict):
-                            continue
-                        reasons = d.get("reasons", [])
-                        if isinstance(reasons, list):
-                            reason_text = "; ".join([str(x) for x in reasons if str(x).strip()])
+                        rows: List[Dict[str, Any]] = []
+                        for d in decisions:
+                            if not isinstance(d, dict):
+                                continue
+                            reasons = d.get("reasons", [])
+                            if isinstance(reasons, list):
+                                reason_text = "; ".join([str(x) for x in reasons if str(x).strip()])
+                            else:
+                                reason_text = str(reasons)
+                            details = d.get("details", {}) if isinstance(d.get("details", {}), dict) else {}
+
+                            rows.append({
+                                "Time": d.get("time", ""),
+                                "Symbol": d.get("symbol", ""),
+                                "Decision": d.get("decision", ""),
+                                "Reason(s)": reason_text,
+                                "Score": details.get("score", ""),
+                                "Alpha Threshold": details.get("alpha_threshold", ""),
+                                "Sector": details.get("sector", ""),
+                                "Shares": details.get("filled_shares", details.get("shares", details.get("requested_shares", ""))),
+                                "Price": details.get("fill_price", details.get("limit_price", details.get("entry_price_est", ""))),
+                            })
+
+                        if rows:
+                            entry_df = pd.DataFrame(rows)
+                            # Parse time for filtering (keep original Time string too)
+                            try:
+                                entry_df["_time_dt"] = pd.to_datetime(entry_df["Time"], errors="coerce")
+                                entry_df["_time_only"] = entry_df["_time_dt"].dt.time
+                            except Exception:
+                                entry_df["_time_dt"] = pd.NaT
+                                entry_df["_time_only"] = None
+
+                            # ---- Filters ----
+                            st.markdown("**Filters**")
+                            f1, f2, f3, f4 = st.columns(4)
+
+                            # Symbol filter
+                            with f1:
+                                symbols = sorted({str(s) for s in entry_df["Symbol"].dropna().unique() if str(s).strip()})
+                                symbol_choice = st.selectbox(
+                                    "Symbol",
+                                    options=["All"] + symbols,
+                                    index=0,
+                                    key="entry_decisions_symbol_filter",
+                                )
+
+                            # Decision type filter
+                            with f2:
+                                decisions_unique = sorted({str(x) for x in entry_df["Decision"].dropna().unique() if str(x).strip()})
+                                decision_choice = st.multiselect(
+                                    "Decision",
+                                    options=decisions_unique,
+                                    default=decisions_unique,
+                                    key="entry_decisions_decision_filter",
+                                )
+
+                            # Score range filter
+                            with f3:
+                                score_series = pd.to_numeric(entry_df["Score"], errors="coerce")
+                                score_min_default = float(score_series.min()) if score_series.notna().any() else 0.0
+                                score_max_default = float(score_series.max()) if score_series.notna().any() else 100.0
+                                score_min, score_max = st.slider(
+                                    "Score range",
+                                    min_value=0.0,
+                                    max_value=100.0,
+                                    value=(max(0.0, min(100.0, score_min_default)), max(0.0, min(100.0, score_max_default))),
+                                    step=1.0,
+                                    key="entry_decisions_score_filter",
+                                )
+
+                            # Time window filter (morning/afternoon entry windows from creds.json)
+                            with f4:
+                                time_window = st.selectbox(
+                                    "Entry window",
+                                    options=["All", "Morning", "Afternoon"],
+                                    index=0,
+                                    key="entry_decisions_time_window_filter",
+                                    help="Filters decisions by when they occurred, using TRADING_HOURS from creds.json.",
+                                )
+
+                            filtered = entry_df.copy()
+
+                            # Apply symbol filter
+                            if symbol_choice != "All":
+                                filtered = filtered[filtered["Symbol"].astype(str) == str(symbol_choice)]
+
+                            # Apply decision filter
+                            if decision_choice:
+                                filtered = filtered[filtered["Decision"].astype(str).isin([str(x) for x in decision_choice])]
+                            else:
+                                filtered = filtered.iloc[0:0]
+
+                            # Apply score filter
+                            filtered_score = pd.to_numeric(filtered["Score"], errors="coerce")
+                            filtered = filtered[(filtered_score >= score_min) & (filtered_score <= score_max)]
+
+                            # Apply time window filter
+                            if time_window != "All":
+                                th = config.get("TRADING_HOURS", {}) if isinstance(config, dict) else {}
+                                def _parse_hhmm(s: Any):
+                                    try:
+                                        return datetime.strptime(str(s), "%H:%M").time()
+                                    except Exception:
+                                        return None
+                                if time_window == "Morning":
+                                    start_t = _parse_hhmm(th.get("morning_entry_start"))
+                                    end_t = _parse_hhmm(th.get("morning_entry_end"))
+                                else:
+                                    start_t = _parse_hhmm(th.get("afternoon_entry_start"))
+                                    end_t = _parse_hhmm(th.get("afternoon_entry_end"))
+
+                                if start_t and end_t and "_time_only" in filtered.columns:
+                                    tseries = filtered["_time_only"]
+                                    # Handle windows that might cross midnight (unlikely, but safe)
+                                    if start_t <= end_t:
+                                        filtered = filtered[(tseries >= start_t) & (tseries <= end_t)]
+                                    else:
+                                        filtered = filtered[(tseries >= start_t) | (tseries <= end_t)]
+
+                            # Clean helper cols
+                            if "_time_dt" in filtered.columns:
+                                filtered = filtered.drop(columns=["_time_dt", "_time_only"], errors="ignore")
+
+                            # Make Arrow-compatible: mixed numeric/'' columns can crash pyarrow conversion
+                            for col in filtered.columns:
+                                if filtered[col].dtype == object:
+                                    filtered[col] = filtered[col].astype(str)
+
+                            st.dataframe(filtered, width="stretch")
                         else:
-                            reason_text = str(reasons)
-                        details = d.get("details", {}) if isinstance(d.get("details", {}), dict) else {}
-
-                        rows.append({
-                            "Time": d.get("time", ""),
-                            "Symbol": d.get("symbol", ""),
-                            "Decision": d.get("decision", ""),
-                            "Reason(s)": reason_text,
-                            "Score": details.get("score", ""),
-                            "Alpha Threshold": details.get("alpha_threshold", ""),
-                            "Sector": details.get("sector", ""),
-                            "Shares": details.get("filled_shares", details.get("shares", details.get("requested_shares", ""))),
-                            "Price": details.get("fill_price", details.get("limit_price", details.get("entry_price_est", ""))),
-                        })
-
-                    if rows:
-                        st.dataframe(pd.DataFrame(rows), width="stretch")
+                            st.info("Entry decision feed is present, but no readable rows were found.")
+                        st.markdown("---")
                     else:
-                        st.info("Entry decision feed is present, but no readable rows were found.")
-                    st.markdown("---")
-                else:
-                    # Don't show an error; just keep UI clean if bot hasn't written anything yet.
-                    pass
-            except Exception as e:
-                st.warning(f"Could not load entry decisions: {e}")
+                        # Don't show an error; just keep UI clean if bot hasn't written anything yet.
+                        pass
+                except Exception as e:
+                    st.warning(f"Could not load entry decisions: {e}")
             
             # Add filter options in a single row
             col1, col2, col3, col4 = st.columns(4)

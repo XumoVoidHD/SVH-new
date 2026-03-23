@@ -5,10 +5,10 @@ from stock_selector import StockSelector, initialize_stock_selector
 import random
 import threading
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 import pytz
 from helpers import vwap, ema, macd, adx, atr
-from helpers.json_utils import dumps_safe
+from helpers.json_utils import dumps_safe, json_safe
 from helpers.fetch_marketcap_csv import fetch_marketcap_csv
 from log import setup_logger
 from db.trades_db import trades_db
@@ -79,7 +79,8 @@ def _write_entry_decision(symbol: str, decision: str, reasons: List[str], detail
             "symbol": str(symbol),
             "decision": str(decision),  # "entered" | "rejected" | "order_failed"
             "reasons": [str(r) for r in (reasons or [])],
-            "details": details or {},
+            # details often contains numpy/pandas scalars/booleans; sanitize to native JSON types
+            "details": json_safe(details or {}),
         }
 
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "entry_decisions.json")
@@ -727,8 +728,22 @@ class Strategy:
         
         try:
             # Volume spike check
-            recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-1])
-            avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-1])
+            # Wait for the current bar to close, then use penultimate bar for safety.
+            self._wait_for_bar_to_close(volume_avg_tf, buffer_seconds=5)
+            self._refresh_volume_avg_after_wait(volume_avg_tf)
+
+            # Debug: print last 20 rows of timestamp, volume, and rolling volume average.
+            try:
+                vol_debug_df = self.data[volume_avg_tf].copy()
+                vol_debug_df["volume_avg"] = self.indicators[volume_avg_tf]["volume_avg"]
+                print(f"[{self.stock}] Volume debug ({volume_avg_tf}) - last 20 rows:")
+                print(vol_debug_df.tail(20))
+            except Exception as debug_err:
+                print(f"[{self.stock}] Volume debug print failed ({volume_avg_tf}): {debug_err}")
+
+            # Avoid the last candle when it's still forming: use penultimate bar when possible.
+            recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-2])
+            avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-2])
             multiplier = self.alpha_score_config.volume_volatility.conditions.volume_spike.multiplier
             volume_ok = bool(recent_volume > multiplier * avg_volume)
             adx_val = float(self.indicators[adx_tf]['adx'].iloc[-1])
@@ -818,8 +833,22 @@ class Strategy:
                 print(f"  OVERALL: FAILED — Reason: Missing or empty volume data for '{volume_avg_tf}'.")
             else:
                 try:
-                    recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-1])
-                    avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-1])
+                    # Wait for the current bar to close, then use penultimate bar for safety.
+                    self._wait_for_bar_to_close(volume_avg_tf, buffer_seconds=5)
+                    self._refresh_volume_avg_after_wait(volume_avg_tf)
+
+                    # Debug: print last 20 rows of timestamp, volume, and rolling volume average.
+                    try:
+                        vol_debug_df = self.data[volume_avg_tf].copy()
+                        vol_debug_df["volume_avg"] = self.indicators[volume_avg_tf]["volume_avg"]
+                        print(f"[{self.stock}] Additional-check volume debug ({volume_avg_tf}) - last 20 rows:")
+                        print(vol_debug_df.tail(20))
+                    except Exception as debug_err:
+                        print(f"[{self.stock}] Additional-check volume debug print failed ({volume_avg_tf}): {debug_err}")
+
+                    # Avoid the last candle when it's still forming: use penultimate bar when possible.
+                    recent_volume = float(self.data[volume_avg_tf]['volume'].iloc[-2])
+                    avg_volume = float(self.indicators[volume_avg_tf]['volume_avg'].iloc[-2])
                     volume_multiplier = self.additional_checks_config.volume_multiplier
                     required_volume = volume_multiplier * avg_volume
                     volume_check = bool(recent_volume > required_volume)
@@ -841,7 +870,7 @@ class Strategy:
                 vwap_slope_check = self._check_vwap_slope()
 
                 bypass_alpha = self.additional_checks_config.trin_tick_bypass_alpha
-                if self.score > bypass_alpha:
+                if self.score >= bypass_alpha:
                     market_conditions_check = True
                     print(f"  [3] TRIN/TICK: BYPASSED — Alpha Score ({self.score}) > bypass threshold ({bypass_alpha}).")
                 else:
@@ -892,6 +921,71 @@ class Strategy:
             return int(s)
         except Exception:
             return None
+
+    def _wait_for_bar_to_close(self, tf_name: str, buffer_seconds: int = 5, max_wait_seconds: int = 180):
+        """
+        Wait until the most recently fetched candle for `tf_name` is expected to be closed.
+
+        Uses the last candle's timestamp (data[tf_name]['date']) plus bar duration,
+        compared to current time in the strategy timezone.
+        """
+        try:
+            minutes = self._timeframe_to_minutes(tf_name)
+            if not minutes:
+                return
+            if tf_name not in self.data:
+                return
+            data = self.data[tf_name]
+            if data is None or getattr(data, "empty", False):
+                return
+            if "date" not in data.columns or len(data["date"]) < 1:
+                return
+
+            eastern_tz = pytz.timezone(self.trading_hours.timezone)
+            now = datetime.now(eastern_tz)
+            last_bar_start = data["date"].iloc[-1]
+
+            # Normalize timestamps to naive "local" time for safe subtraction
+            if hasattr(last_bar_start, "tzinfo") and last_bar_start.tzinfo is not None:
+                last_bar_start = last_bar_start.astimezone(eastern_tz).replace(tzinfo=None)
+            else:
+                # Assume the broker timestamp is already aligned with the strategy timezone
+                last_bar_start = last_bar_start.replace(tzinfo=None)
+
+            now_naive = now.replace(tzinfo=None)
+            bar_end = last_bar_start + timedelta(minutes=minutes)
+            remaining = (bar_end - now_naive).total_seconds()
+
+            if remaining <= 0:
+                return
+
+            sleep_for = min(max_wait_seconds, remaining + buffer_seconds)
+            if sleep_for > 0:
+                print(f"Waiting {sleep_for:.1f}s for {tf_name} candle to close before volume calc...")
+                time.sleep(sleep_for)
+        except Exception:
+            # Safety: never block trading logic on waiting
+            return
+
+    def _refresh_volume_avg_after_wait(self, volume_avg_tf: str):
+        """Refetch volume_avg timeframe data and recompute the rolling volume_avg series."""
+        try:
+            minutes = self._timeframe_to_minutes(volume_avg_tf)
+            if not minutes:
+                return
+            data_v = self.get_historical_data_with_retry(stock=self.stock, bar_size=minutes)
+            if data_v is None or getattr(data_v, "empty", False):
+                return
+            if "volume" not in data_v.columns:
+                return
+
+            self.data[volume_avg_tf] = data_v
+
+            window = int(getattr(self.indicators_config.volume_avg.params, "window", 20))
+            self.indicators.setdefault(volume_avg_tf, {})
+            self.indicators[volume_avg_tf]["volume_avg"] = data_v["volume"].rolling(window=window).mean()
+        except Exception:
+            return
     
     def _check_vwap_slope(self):
         """Check VWAP slope condition"""
@@ -1052,7 +1146,7 @@ class Strategy:
         offset_min = getattr(creds.ORDER_CONFIG, 'limit_offset_min', 0.0003)  # 0.03%
         offset_max = getattr(creds.ORDER_CONFIG, 'limit_offset_max', 0.0007)   # 0.07%
         offset_pct = random.uniform(offset_min, offset_max)
-        sign = random.choice([1, -1])
+        sign = random.choice([1])
         limit_price = vwap_value * (1 + sign * offset_pct)
         
         print(f"Position Size: {shares} shares")
@@ -1222,11 +1316,113 @@ class Strategy:
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
                 print(f"Alpha Score too low: {self.score} < {creds.RISK_CONFIG.alpha_score_threshold}")
                 reasons.append(f"Alpha score {self.score:.1f} < required {creds.RISK_CONFIG.alpha_score_threshold}")
+
+                # Add which alpha-score components failed (if available)
+                try:
+                    cp = getattr(self, "criteria_passed", {}) or {}
+                    iv = getattr(self, "indicator_values", {}) or {}
+                    failed_alpha = []
+
+                    if cp.get("trend_passed") is False:
+                        close_px = iv.get("close")
+                        vwap_val = iv.get("vwap")
+                        ema1_val = iv.get("ema1")
+                        ema2_val = iv.get("ema2")
+                        failed_alpha.append(
+                            f"Trend failed: price_above_vwap={cp.get('price_above_vwap')} (close={close_px:.2f} vs vwap={vwap_val:.2f}) "
+                            f"and ema_cross={cp.get('ema_cross')} (ema1={ema1_val:.2f} vs ema2={ema2_val:.2f})"
+                            if all(isinstance(x, (int, float)) for x in [close_px, vwap_val, ema1_val, ema2_val])
+                            else "Trend failed (price above VWAP and EMA cross not both true)"
+                        )
+
+                    if cp.get("momentum_passed") is False:
+                        macd_val = iv.get("adjusted_macd")
+                        failed_alpha.append(
+                            f"Momentum failed: adjusted_macd={macd_val:.4f} (need > 0)"
+                            if isinstance(macd_val, (int, float))
+                            else "Momentum failed: MACD condition not met"
+                        )
+
+                    if cp.get("volume_volatility_passed") is False:
+                        vol_recent = iv.get("volume")
+                        vol_avg = iv.get("volume_avg")
+                        adx_val = iv.get("adx")
+                        vol_mult = getattr(self.alpha_score_config.volume_volatility.conditions.volume_spike, "multiplier", None)
+                        adx_thr = getattr(self.alpha_score_config.volume_volatility.conditions.adx_threshold, "threshold", None)
+                        parts = []
+                        if isinstance(vol_recent, (int, float)) and isinstance(vol_avg, (int, float)) and isinstance(vol_mult, (int, float)):
+                            parts.append(f"volume={vol_recent:,.0f} (need > {vol_mult:.2f}×avg {vol_avg:,.0f} = {vol_mult*vol_avg:,.0f})")
+                        if isinstance(adx_val, (int, float)) and isinstance(adx_thr, (int, float)):
+                            parts.append(f"ADX={adx_val:.1f} (need > {adx_thr})")
+                        if parts:
+                            failed_alpha.append("Volume/Volatility failed: " + "; ".join(parts))
+                        else:
+                            failed_alpha.append("Volume/Volatility failed (volume spike + ADX threshold not both met)")
+
+                    if cp.get("market_calm_passed") is False:
+                        vix_val = iv.get("vix")
+                        vix_thr = getattr(self.alpha_score_config.market_calm.conditions.vix_threshold, "threshold", None)
+                        vix_low = cp.get("vix_low")
+                        vix_drop = cp.get("vix_dropping")
+                        if isinstance(vix_val, (int, float)) and isinstance(vix_thr, (int, float)):
+                            failed_alpha.append(
+                                f"Market calm failed: vix_low={vix_low} (VIX={vix_val:.1f}, need < {vix_thr}); vix_dropping={vix_drop}"
+                            )
+                        else:
+                            failed_alpha.append("Market calm failed (VIX below threshold and dropping not both true)")
+
+                    if failed_alpha:
+                        reasons.append("Alpha conditions failed: " + " | ".join(failed_alpha))
+                except Exception:
+                    # keep reasons minimal if anything unexpected
+                    pass
             if not bool(self.additional_checks_passed):
                 print("Additional checks failed")
                 failed = getattr(self, "additional_checks_failed", None)
                 if isinstance(failed, list) and failed:
-                    reasons.append(f"Additional checks failed: {', '.join([str(x) for x in failed])}")
+                    # Add observed vs threshold for each failed additional check (when possible)
+                    try:
+                        iv = getattr(self, "indicator_values", {}) or {}
+                        detail_parts = []
+                        for chk in failed:
+                            if chk == "volume":
+                                recent = iv.get("volume_recent")
+                                avg = iv.get("volume_avg_addl")
+                                mult = getattr(self.additional_checks_config, "volume_multiplier", None)
+                                if all(isinstance(x, (int, float)) for x in [recent, avg, mult]):
+                                    detail_parts.append(f"Volume check failed: recent={recent:,.0f} ≤ required>{mult:.2f}×avg {avg:,.0f} = {mult*avg:,.0f}")
+                                else:
+                                    detail_parts.append("Volume check failed")
+                            elif chk == "VWAP slope":
+                                slope = iv.get("vwap_slope")
+                                thr = getattr(self.additional_checks_config, "vwap_slope_threshold", None)
+                                if isinstance(slope, (int, float)) and isinstance(thr, (int, float)):
+                                    detail_parts.append(f"VWAP slope failed: slope={slope:.4f} $/min ≤ threshold {thr}")
+                                else:
+                                    detail_parts.append("VWAP slope failed")
+                            elif chk == "TRIN/TICK":
+                                trin = iv.get("trin")
+                                tick_ma = iv.get("tick_ma")
+                                trin_thr = getattr(self.additional_checks_config, "trin_threshold", None)
+                                tick_thr = getattr(self.additional_checks_config, "tick_threshold", None)
+                                parts = []
+                                if isinstance(trin, (int, float)) and isinstance(trin_thr, (int, float)):
+                                    parts.append(f"TRIN={trin:.2f} (need ≤ {trin_thr})")
+                                if isinstance(tick_ma, (int, float)) and isinstance(tick_thr, (int, float)):
+                                    parts.append(f"TICK MA={tick_ma:.0f} (need ≥ {tick_thr})")
+                                if parts:
+                                    detail_parts.append("TRIN/TICK failed: " + "; ".join(parts))
+                                else:
+                                    detail_parts.append("TRIN/TICK failed")
+                            else:
+                                detail_parts.append(f"{chk} failed")
+
+                        if detail_parts:
+                            reasons.append("Additional checks failed: " + " | ".join(detail_parts))
+                        else:
+                            reasons.append(f"Additional checks failed: {', '.join([str(x) for x in failed])}")
+                    except Exception:
+                        reasons.append(f"Additional checks failed: {', '.join([str(x) for x in failed])}")
                 else:
                     reasons.append("Additional checks failed")
             if reasons:
@@ -1238,6 +1434,9 @@ class Strategy:
                         "score": float(self.score),
                         "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
                         "additional_checks_passed": bool(self.additional_checks_passed),
+                        "additional_checks_failed": list(getattr(self, "additional_checks_failed", []) or []),
+                        "criteria_passed": dict(getattr(self, "criteria_passed", {}) or {}),
+                        "indicator_values": dict(getattr(self, "indicator_values", {}) or {}),
                     },
                 )
         return -1
@@ -2672,7 +2871,7 @@ class StrategyManager:
                     self.stop_event.set()
                     break
 
-                time.sleep(5)
+                time.sleep(60)
             except Exception as e:
                 print(f"Error in drawdown monitoring: {e}")
                 time.sleep(5)

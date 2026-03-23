@@ -1,0 +1,55 @@
+{
+  "updated_at": "2026-03-18 11:57:10",
+  "decisions": [
+    {
+      "time": "2026-03-17 03:44:31",
+      "symbol": "TEST",
+      "decision": "rejected",
+      "reasons": [
+        "example reason"
+      ],
+      "details": {
+        "score": 1
+      }
+    },
+    {
+      "time": "2026-03-17 03:57:23",
+      "symbol": "XYZ",
+      "decision": "rejected",
+      "reasons": [
+        "Alpha score 70 < required 85",
+        "Additional checks failed: VWAP slope failed: slope=0.0010 $/min \u00134 threshold 0.0050"
+      ],
+      "details": {
+        "score": 70,
+        "alpha_threshold": 85
+      }
+    },
+    {
+      "time": "2026-03-17 03:57:24",
+      "symbol": "XYZ",
+      "decision": "rejected",
+      "reasons": [
+        "Alpha score 70 < required 85",
+        "Additional checks failed: VWAP slope failed: slope=0.0010 $/min \u00134 threshold 0.0050"
+      ],
+      "details": {
+        "score": 70,
+        "alpha_threshold": 85
+      }
+    },
+    {
+      "time": "2026-03-18 11:57:10",
+      "symbol": "TEST2",
+      "decision": "rejected",
+      "reasons": [
+        "reason"
+      ],
+      "details": {
+        "score": 70,
+        "alpha_threshold": true,
+        "x": 1.5
+      }
+    }
+  ]
+}

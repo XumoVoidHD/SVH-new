@@ -73,7 +73,7 @@
         "trin_tick_bypass_alpha": 85,
         "trin_threshold": 1.1,
         "tick_ma_window": 1,
-        "tick_threshold": 0
+        "tick_threshold": -80
     },
     "ALPHA_SCORE_CONFIG": {
         "trend": {
