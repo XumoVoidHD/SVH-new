@@ -2482,7 +2482,7 @@ def main():
             # Order Configuration
             st.markdown("---")
             st.write("**Order Configuration**")
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 limit_offset_min = st.number_input(
                     "Min Limit Offset (%):", 
@@ -2513,6 +2513,14 @@ def main():
                     value=order_config.get('order_window', 60), 
                     step=10, 
                     key="order_window"
+                )
+            with col4:
+                order_type = st.selectbox(
+                    "Order Type:",
+                    options=["MARKET", "LIMIT"],
+                    index=0 if str(order_config.get("order_type", "MARKET")).upper() == "MARKET" else 1,
+                    key="order_type",
+                    help="MARKET uses avgFillPrice from IB. LIMIT uses the VWAP-offset limit price and may not fill within Order Window.",
                 )
         
         with tab4:
@@ -3358,7 +3366,8 @@ def main():
                 "ORDER_CONFIG": {
                     "limit_offset_min": limit_offset_min,
                     "limit_offset_max": limit_offset_max,
-                    "order_window": order_window
+                    "order_window": order_window,
+                    "order_type": order_type
                 },
                 "TRADING_HOURS": {
                     "market_open": market_open.strftime("%H:%M"),

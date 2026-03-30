@@ -319,7 +319,7 @@ class IBBroker(EWrapper, EClient):
                         if filled > 0:
                             return order_id, avg_price, filled
                         else:
-                            return order_id, -1, avg_price
+                            return order_id, -1, 0
         
         self.cancel_order(order_id)
         
@@ -330,9 +330,9 @@ class IBBroker(EWrapper, EClient):
                 if filled > 0:
                     return order_id, avg_price, filled
                 else:
-                    return order_id, -1, avg_price
+                    return order_id, -1, 0
         
-        return order_id, 0, -1
+        return order_id, -1, 0
 
 
     def cancel_order(self, order_id):

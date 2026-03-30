@@ -1232,90 +1232,120 @@ class Strategy:
                     else:
                         print(f"Enough available capital to place order for {self.stock}")
 
-                # Use a market order and take avgFillPrice + filled qty returned by IB.
-                # StrategyBroker.place_order(..., order_type="MARKET") returns (order_id, avg_price, filled_qty)
-                trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="MARKET", side="BUY")
-                avg_fill_price = trade[1] if trade and len(trade) > 1 else -1
-                filled_qty = int(trade[2]) if trade and len(trade) > 2 else 0
-                if float(avg_fill_price) == -1 or filled_qty <= 0:
-                    print(f"Unable to place order for {self.stock}")
-                    _write_entry_decision(
-                        self.stock,
-                        "order_failed",
-                        ["Market order was not filled (timed out or rejected)"],
-                        details={
-                            "score": float(self.score),
-                            "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
-                            "limit_price": float(limit_price),
-                            "requested_shares": int(shares),
-                            "filled_shares": int(filled_qty),
-                        },
-                    )
-                    return
-                else:
+                order_type_cfg = str(getattr(creds.ORDER_CONFIG, "order_type", "MARKET")).upper()
+                if order_type_cfg not in ("MARKET", "LIMIT"):
+                    order_type_cfg = "MARKET"
+
+                if order_type_cfg == "MARKET":
+                    # StrategyBroker.place_order(..., order_type="MARKET") returns (order_id, avg_price, filled_qty)
+                    trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="MARKET", side="BUY")
+                    avg_fill_price = trade[1] if trade and len(trade) > 1 else -1
+                    filled_qty = int(trade[2]) if trade and len(trade) > 2 else 0
+                    if float(avg_fill_price) == -1 or filled_qty <= 0:
+                        print(f"Unable to place order for {self.stock}")
+                        _write_entry_decision(
+                            self.stock,
+                            "order_failed",
+                            ["Market order was not filled (timed out or rejected)"],
+                            details={
+                                "score": float(self.score),
+                                "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                                "requested_shares": int(shares),
+                                "filled_shares": int(filled_qty),
+                            },
+                        )
+                        return
                     if filled_qty != shares:
                         print(f"Market order partially filled for {self.stock}: requested={shares}, filled={filled_qty}")
                     shares = filled_qty
                     print(f"Order placed for {self.stock}: {trade} (avg_fill_price={avg_fill_price}, filled={filled_qty})")
                     cost = shares * float(avg_fill_price)
-                    with self.manager.manager_lock:
-                        self.used_capital += cost
-                        self.manager.available_capital -= cost
-                        self.manager.used_capital += cost
-                        self.manager.stock_invested_capital += cost
-                        self.manager.sector_used_capital[self.sector] = self.manager.sector_used_capital.get(self.sector, 0) + cost
-                        print(f"Used Capital: ${self.used_capital:.2f}")
-                        print(f"Available Capital: ${self.manager.available_capital:.2f}")
-                        print(f"Stock Invested Capital: ${self.manager.stock_invested_capital:.2f}")
-                        print(f"Sector '{self.sector}' used capital: ${self.manager.sector_used_capital.get(self.sector, 0):,.0f}")
+                    fill_price_for_state = float(avg_fill_price)
+                else:
+                    # StrategyBroker.place_order(..., order_type="LIMIT") returns (order_id, avg_price, filled_qty)
+                    trade = self.broker.place_order(symbol=self.stock, qty=shares, order_type="LIMIT", price=round(limit_price, 2), side="BUY")
+                    avg_fill_price = trade[1] if trade and len(trade) > 1 else -1
+                    filled_qty = int(trade[2]) if trade and len(trade) > 2 else 0
+                    if float(avg_fill_price) == -1 or filled_qty <= 0:
+                        print(f"Unable to place order for {self.stock}")
+                        _write_entry_decision(
+                            self.stock,
+                            "order_failed",
+                            ["Limit order was not filled (timed out or rejected)"],
+                            details={
+                                "score": float(self.score),
+                                "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                                "limit_price": float(limit_price),
+                                "requested_shares": int(shares),
+                                "filled_shares": int(filled_qty),
+                            },
+                        )
+                        return
+                    if filled_qty != shares:
+                        print(f"Limit order partially filled for {self.stock}: requested={shares}, filled={filled_qty}")
+                    shares = filled_qty
+                    print(f"Order placed for {self.stock}: {trade} (avg_fill_price={avg_fill_price}, filled={filled_qty})")
+                    cost = shares * float(avg_fill_price)
+                    fill_price_for_state = float(avg_fill_price)
 
-                    self.entry_price = float(avg_fill_price)
-                    self.stop_loss_price = stop_loss
-                    self.take_profit_price = self.entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
-                    self.position_shares = shares
-                    self.position_active = True
-                    self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
-                    self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
-                    print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
+                with self.manager.manager_lock:
+                    self.used_capital += cost
+                    self.manager.available_capital -= cost
+                    self.manager.used_capital += cost
+                    self.manager.stock_invested_capital += cost
+                    self.manager.sector_used_capital[self.sector] = self.manager.sector_used_capital.get(self.sector, 0) + cost
+                    print(f"Used Capital: ${self.used_capital:.2f}")
+                    print(f"Available Capital: ${self.manager.available_capital:.2f}")
+                    print(f"Stock Invested Capital: ${self.manager.stock_invested_capital:.2f}")
+                    print(f"Sector '{self.sector}' used capital: ${self.manager.sector_used_capital.get(self.sector, 0):,.0f}")
 
-                    eastern_tz = pytz.timezone('US/Eastern')
-                    self.entry_time = datetime.now(eastern_tz)
-                    self.current_price = float(avg_fill_price)
-                    # self.unrealized_pnl = 0.0
-                    # self.realized_pnl = 0.0
-                    print(f"Position tracking initialized for {self.stock}:")
-                    print(f"  - Entry Price: ${self.entry_price:.2f}")
-                    print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
-                    print(f"  - Take Profit: ${self.take_profit_price:.2f}")
-                    print(f"  - Entry Time: {self.entry_time}")
-                    
-                    # Update database with position initialization
-                    trades_db.update_strategy_data(self.stock,
-                        position_active=True,
-                        position_shares=shares,
-                        shares=shares,
-                        entry_price=self.entry_price,
-                        stop_loss_price=self.stop_loss_price,
-                        take_profit_price=self.take_profit_price,
-                        entry_time=self.entry_time,
-                        current_price=self.current_price,
-                        unrealized_pnl=self.unrealized_pnl,
-                        realized_pnl=self.realized_pnl,
-                        used_capital=self.used_capital,
-                        sector=self.sector
-                    )
-                    _write_entry_decision(
-                        self.stock,
-                        "entered",
-                        ["Entry conditions met and order filled"],
-                        details={
-                            "score": float(self.score),
-                            "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
-                            "filled_shares": int(shares),
-                            "fill_price": float(trade[1]),
-                            "sector": str(self.sector),
-                        },
-                    )
+                self.entry_price = float(fill_price_for_state)
+                self.stop_loss_price = stop_loss
+                self.take_profit_price = self.entry_price * (1 + creds.PROFIT_CONFIG.profit_booking_levels[0]['gain'])  # Use 1% from profit booking levels
+                self.position_shares = shares
+                self.position_active = True
+                self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
+                self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
+                print(f"[{self.stock}] Profit booking and trailing stop levels reset for new position")
+
+                eastern_tz = pytz.timezone('US/Eastern')
+                self.entry_time = datetime.now(eastern_tz)
+                self.current_price = float(fill_price_for_state)
+                # self.unrealized_pnl = 0.0
+                # self.realized_pnl = 0.0
+                print(f"Position tracking initialized for {self.stock}:")
+                print(f"  - Entry Price: ${self.entry_price:.2f}")
+                print(f"  - Stop Loss: ${self.stop_loss_price:.2f}")
+                print(f"  - Take Profit: ${self.take_profit_price:.2f}")
+                print(f"  - Entry Time: {self.entry_time}")
+                
+                # Update database with position initialization
+                trades_db.update_strategy_data(self.stock,
+                    position_active=True,
+                    position_shares=shares,
+                    shares=shares,
+                    entry_price=self.entry_price,
+                    stop_loss_price=self.stop_loss_price,
+                    take_profit_price=self.take_profit_price,
+                    entry_time=self.entry_time,
+                    current_price=self.current_price,
+                    unrealized_pnl=self.unrealized_pnl,
+                    realized_pnl=self.realized_pnl,
+                    used_capital=self.used_capital,
+                    sector=self.sector
+                )
+                _write_entry_decision(
+                    self.stock,
+                    "entered",
+                    ["Entry conditions met and order filled"],
+                    details={
+                        "score": float(self.score),
+                        "alpha_threshold": float(creds.RISK_CONFIG.alpha_score_threshold),
+                        "filled_shares": int(shares),
+                        "fill_price": float(fill_price_for_state),
+                        "sector": str(self.sector),
+                    },
+                )
         else:
             reasons = []
             if self.score < creds.RISK_CONFIG.alpha_score_threshold:
