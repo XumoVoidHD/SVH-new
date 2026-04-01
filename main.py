@@ -1591,6 +1591,12 @@ class Strategy:
                 self.trailing_exit_start_price = self.current_price
                 # Track peak price during the monitoring window so drop is from the high, not just the start price
                 self.trailing_exit_peak_price = self.current_price
+                print(
+                    f"[{self.stock}] TAKE PROFIT ARMED | kind=trailing_exit_monitor | "
+                    f"gain_now={current_gain_pct*100:.2f}% (need >= {gain_threshold*100:.2f}% to arm) | "
+                    f"will exit ALL shares if drop from PEAK during window >= {drop_threshold*100:.2f}% "
+                    f"within {monitor_period} min | reason=lock profits; exit on pullback from high"
+                )
                 print(f"Starting trailing exit monitoring at {gain_threshold*100:.1f}% gain")
                 print(f"Monitoring for {drop_threshold*100:.1f}% price drop from peak for {monitor_period} minutes, checking every second")
                 
@@ -1639,8 +1645,18 @@ class Strategy:
                         
                         # Check if price drop threshold is met
                         if price_drop >= drop_threshold:
-                            print(f"Trailing Exit: Price dropped by {price_drop*100:.2f}% within {elapsed_seconds/60:.1f} minutes")
-                            print(f"Closing all remaining shares ({self.position_shares}) due to trailing exit")
+                            rem = self.position_shares
+                            approx_notional = float(self.current_price or 0) * float(rem)
+                            print(
+                                f"[{self.stock}] TAKE PROFIT TRIGGERED | kind=trailing_exit_full | "
+                                f"min_gain_to_arm={gain_threshold*100:.2f}% | current_gain="
+                                f"{(self.current_price - self.entry_price) / self.entry_price * 100:.2f}% | "
+                                f"peak_during_window=${self.trailing_exit_peak_price:.2f} | "
+                                f"price_now=${self.current_price:.2f} | drop_from_peak={price_drop*100:.2f}% "
+                                f"(threshold {drop_threshold*100:.2f}%) | shares={rem} | "
+                                f"est_notional_usd={approx_notional:.2f} | "
+                                f"reason=after min gain, price fell from session peak by >= drop threshold inside monitor window"
+                            )
                             self.close_position('trailing_exit', self.position_shares)
                             return  # Exit the function and stop monitoring
                         
@@ -1680,14 +1696,14 @@ class Strategy:
             print(f"Partially closing position: {shares_to_sell} shares out of {self.position_shares}")
         if shares_to_sell <= 0:
             print(f"No shares to sell for {self.stock}")
-            return
+            return False
         
         # Calculate realized PnL for shares being sold
         
         trade = self.broker.place_order(symbol=self.stock, qty=shares_to_sell, order_type="MARKET", price=current_price, side="SELL")
         if trade is None:
             print(f"Unable to place order for {self.stock}")
-            return
+            return False
         
         with self.manager.manager_lock:
             self.manager.available_capital += trade[1] * shares_to_sell
@@ -1774,13 +1790,17 @@ class Strategy:
                 realized_pnl=self.realized_pnl,
                 current_price=current_price,
                 used_capital=self.used_capital
-            ) 
+            )
+        return True
     
     def _check_profit_booking(self, current_gain_pct, current_price):
         """Check profit booking levels"""
         # Create a local copy of profit booking levels to avoid modifying the global config
         if not hasattr(self, 'profit_booking_levels_remaining'):
-            self.profit_booking_levels_remaining = list(creds.PROFIT_CONFIG.profit_booking_levels)
+            self.profit_booking_levels_remaining = sorted(
+                list(creds.PROFIT_CONFIG.profit_booking_levels),
+                key=lambda lvl: lvl['gain'],
+            )
             levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.profit_booking_levels_remaining])
             print(f"[{self.stock}] Profit booking levels initialized: {levels_str}")
         
@@ -1792,11 +1812,24 @@ class Strategy:
             if current_gain_pct >= gain_threshold:
                 # Calculate shares to sell
                 shares_to_sell = int(self.position_shares * exit_pct)
+                if shares_to_sell == 0 and self.position_shares > 0:
+                    shares_to_sell = min(1, self.position_shares)
                 if shares_to_sell > 0:
-                    # Close partial position
-                    self.close_position('profit_booking', shares_to_sell)
-                    print(f"[{self.stock}] Profit Booking: Sold {shares_to_sell} shares at {gain_threshold*100:.1f}% gain")
-                    
+                    est_notional = float(current_price) * float(shares_to_sell)
+                    print(
+                        f"[{self.stock}] TAKE PROFIT TRIGGERED | kind=partial_book | "
+                        f"gain_threshold={gain_threshold*100:.2f}% | current_gain={current_gain_pct*100:.2f}% | "
+                        f"exit_pct_of_position={exit_pct*100:.2f}% | shares={shares_to_sell} | "
+                        f"est_notional_usd={est_notional:.2f} (mark @ ${float(current_price):.2f}) | "
+                        f"reason=price_gain reached partial take-profit tier (>= {gain_threshold*100:.2f}% vs entry)"
+                    )
+                    if not self.close_position('profit_booking', shares_to_sell):
+                        print(
+                            f"[{self.stock}] TAKE PROFIT (partial_book) not completed — order failed; "
+                            f"level {gain_threshold*100:.2f}% stays active for retry."
+                        )
+                        break
+
                     # Remove this level from remaining levels for this strategy instance
                     self.profit_booking_levels_remaining.remove(level)
                     remaining_levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.profit_booking_levels_remaining])
@@ -1807,12 +1840,20 @@ class Strategy:
                         profit_booked_flags={f'profit_booked_{gain_threshold*100:.0f}pct': True}
                     )
                     break
+                print(
+                    f"[{self.stock}] TAKE PROFIT tier skipped: gain >= {gain_threshold*100:.2f}% but "
+                    f"computed shares_to_sell=0 (position_shares={self.position_shares})."
+                )
+                break
     
     def _check_trailing_stops(self, current_gain_pct, current_price):
         """Check trailing stop levels"""
         # Create a local copy of trailing stop levels to avoid modifying the global config
         if not hasattr(self, 'trailing_stop_levels_remaining'):
-            self.trailing_stop_levels_remaining = list(creds.STOP_LOSS_CONFIG.trailing_stop_levels)
+            self.trailing_stop_levels_remaining = sorted(
+                list(creds.STOP_LOSS_CONFIG.trailing_stop_levels),
+                key=lambda lvl: lvl['gain'],
+            )
             levels_str = ', '.join([f'{level["gain"]*100:.1f}%' for level in self.trailing_stop_levels_remaining])
             print(f"[{self.stock}] Trailing stop levels initialized: {levels_str}")
         
@@ -1824,8 +1865,15 @@ class Strategy:
             if current_gain_pct >= gain_threshold:
                 # Move stop loss to new level
                 new_stop_price = self.entry_price * (1 + new_stop_pct)
+                old_sl = self.stop_loss_price
                 self.stop_loss_price = new_stop_price
-                print(f"[{self.stock}] TRAILING STOP: Moved SL to ${new_stop_price:.2f} at {gain_threshold*100:.1f}% gain")
+                print(
+                    f"[{self.stock}] TRAILING STOP TIER TRIGGERED | gain_trigger>={gain_threshold*100:.2f}% | "
+                    f"current_gain={current_gain_pct*100:.2f}% | entry=${self.entry_price:.2f} | "
+                    f"price_now=${float(current_price):.2f} | old_stop=${old_sl:.2f} | new_stop=${new_stop_price:.2f} "
+                    f"({new_stop_pct*100:.2f}% above entry) | "
+                    f"reason=profit trail: lock gains by raising stop when gain reaches this tier"
+                )
                 
                 # Remove this level from remaining levels for this strategy instance
                 self.trailing_stop_levels_remaining.remove(level)
